@@ -63,6 +63,12 @@ button.eylem:disabled{opacity:.45;cursor:not-allowed}
   border:1px dashed var(--line);border-radius:10px;padding:8px 6px}
 .adim.aktif{border-color:var(--gold);color:var(--gold2);border-style:solid}
 .adim.tamam{border-color:var(--green);color:var(--green);border-style:solid}
+.cipler{display:flex;gap:10px;flex-wrap:wrap;margin:-10px 0 16px}
+.cip{font-size:12.5px;color:var(--dim);background:var(--panel);border:1px solid var(--line);
+  border-radius:20px;padding:6px 12px}
+.cip b{color:var(--ink)}
+.onizleme{font-size:12px;color:var(--gold2);margin-top:8px;min-height:16px}
+#gunluk a{color:var(--blue);text-decoration:none}
 footer{margin-top:22px;color:var(--dim);font-size:12px;text-align:center}
 footer a{color:var(--blue);text-decoration:none}
 </style>
@@ -97,6 +103,13 @@ footer a{color:var(--blue);text-decoration:none}
     </div>
   </div>
 
+  <div class="cipler">
+    <span class="cip">Your Sepolia mUSDC: <b id="b-cuzdan">—</b></span>
+    <span class="cip">Karun pool liquidity: <b id="b-havuz">—</b></span>
+    <span class="cip">Fee: <b>0.30%</b></span>
+    <span class="cip">LTV: <b>80%</b></span>
+  </div>
+
   <div class="izgara">
     <div class="bolum">
       <h2>1 · Lock collateral <span class="zincir">Sepolia</span></h2>
@@ -114,6 +127,7 @@ footer a{color:var(--blue);text-decoration:none}
       <input id="harca-alici" placeholder="0x...">
       <label>Amount (mUSDC) · fee 0.30%</label>
       <input id="harca-miktar" type="number" placeholder="1000" min="0">
+      <div id="harca-onizleme" class="onizleme"></div>
       <button class="eylem birincil" id="harca">Spend</button>
     </div>
   </div>
