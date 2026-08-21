@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Karun — one balance, every chain</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🪙</text></svg>">
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+<style>
+:root{
+  --bg:#0b0e14; --panel:#131824; --panel2:#0f1420; --line:#232b3d;
+  --ink:#e8ecf4; --dim:#8b95ab; --gold:#e8b64c; --gold2:#f5d78a;
+  --green:#4cc38a; --red:#e5484d; --blue:#5b9dd9;
+}
+*{box-sizing:border-box;margin:0}
+body{font-family:ui-sans-serif,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+  background:radial-gradient(1200px 600px at 70% -10%,#1a2236 0%,var(--bg) 55%);color:var(--ink);min-height:100vh}
+.wrap{max-width:1060px;margin:0 auto;padding:28px 20px 80px}
+header{display:flex;align-items:center;gap:14px;margin-bottom:6px}
+.logo{width:46px;height:46px;border-radius:12px;display:grid;place-items:center;font-size:26px;
+  background:linear-gradient(135deg,#2a1f0a,#4a3812);border:1px solid #6b5320}
+h1{font-size:26px;letter-spacing:.5px}
+h1 span{color:var(--gold)}
+.tag{color:var(--dim);font-size:14px;margin-top:2px}
+#baglan{margin-left:auto;background:linear-gradient(135deg,var(--gold),#c98f2a);color:#1a1408;border:none;
+  padding:10px 18px;border-radius:10px;font-weight:700;font-size:14px;cursor:pointer}
+#baglan:hover{filter:brightness(1.08)}
+#cuzdan-bilgi{margin-left:auto;text-align:right;font-size:13px;color:var(--dim);display:none}
+#cuzdan-bilgi b{color:var(--ink);font-family:ui-monospace,Menlo,monospace}
+
+.ozet{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:26px 0}
+.kart{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+.kart .k-ad{font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim)}
+.kart .k-deger{font-size:30px;font-weight:800;margin-top:6px;font-variant-numeric:tabular-nums}
+.kart .k-alt{font-size:12px;color:var(--dim);margin-top:4px}
+.kart.altin .k-deger{color:var(--gold2)}
+
+.izgara{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:800px){.izgara{grid-template-columns:1fr}.ozet{grid-template-columns:1fr}}
+.bolum{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+.bolum h2{font-size:15px;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.zincir{font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);color:var(--dim)}
+.bolum p.ac{color:var(--dim);font-size:13px;margin:6px 0 14px;line-height:1.5}
+label{display:block;font-size:12px;color:var(--dim);margin:10px 0 4px}
+input{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:10px;color:var(--ink);
+  padding:11px 12px;font-size:15px;outline:none;font-family:inherit}
+input:focus{border-color:var(--gold)}
+button.eylem{width:100%;margin-top:14px;padding:12px;border:none;border-radius:10px;font-weight:700;
+  font-size:14px;cursor:pointer;background:#1d2740;color:var(--ink);border:1px solid var(--line)}
+button.eylem:hover{background:#243052}
+button.eylem.birincil{background:linear-gradient(135deg,var(--gold),#c98f2a);color:#1a1408;border:none}
+button.eylem:disabled{opacity:.45;cursor:not-allowed}
+
+.akis{margin-top:14px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+.akis h2{font-size:15px;margin-bottom:10px}
+#gunluk{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;line-height:1.75;max-height:260px;
+  overflow-y:auto;white-space:pre-wrap;color:var(--dim)}
+#gunluk .ok{color:var(--green)}
+#gunluk .hata{color:var(--red)}
+#gunluk .bekle{color:var(--gold)}
+.adimlar{display:flex;gap:8px;margin:16px 0 4px;flex-wrap:wrap}
+.adim{flex:1;min-width:120px;text-align:center;font-size:11.5px;color:var(--dim);
+  border:1px dashed var(--line);border-radius:10px;padding:8px 6px}
+.adim.aktif{border-color:var(--gold);color:var(--gold2);border-style:solid}
+.adim.tamam{border-color:var(--green);color:var(--green);border-style:solid}
+footer{margin-top:22px;color:var(--dim);font-size:12px;text-align:center}
+footer a{color:var(--blue);text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">🪙</div>
+    <div>
+      <h1>KAR<span>U</span>N</h1>
+      <div class="tag">one spendable balance across every chain · powered by Attestcoin Protocol</div>
+    </div>
+    <button id="baglan">Connect wallet</button>
+    <div id="cuzdan-bilgi"></div>
+  </header>
+
+  <div class="ozet">
+    <div class="kart">
+      <div class="k-ad">Locked collateral · Sepolia</div>
+      <div class="k-deger" id="o-kilit">—</div>
+      <div class="k-alt">attested on Creditcoin: <span id="o-attested">—</span></div>
+    </div>
+    <div class="kart altin">
+      <div class="k-ad">Spendable limit · everywhere</div>
+      <div class="k-deger" id="o-limit">—</div>
+      <div class="k-alt">80% LTV, minus in-flight settlements</div>
+    </div>
+    <div class="kart">
+      <div class="k-ad">In-flight settlements</div>
+      <div class="k-deger" id="o-borc">—</div>
+      <div class="k-alt">auto-deducted from your escrow</div>
+    </div>
+  </div>
+
+  <div class="izgara">
+    <div class="bolum">
+      <h2>1 · Lock collateral <span class="zincir">Sepolia</span></h2>
+      <p class="ac">Lock mUSDC into your escrow. Attestcoin proves the lock on Creditcoin and your limit opens, no bridging.</p>
+      <label>Amount (mUSDC)</label>
+      <input id="kilit-miktar" type="number" placeholder="5000" min="0">
+      <button class="eylem" id="faucet">Get 10,000 test mUSDC</button>
+      <button class="eylem birincil" id="kilitle">Lock</button>
+    </div>
+
+    <div class="bolum">
+      <h2>2 · Spend anywhere <span class="zincir">Creditcoin</span></h2>
+      <p class="ac">Pay any address instantly from the Karun pool. The cost settles against your Sepolia escrow automatically.</p>
+      <label>Recipient</label>
+      <input id="harca-alici" placeholder="0x...">
+      <label>Amount (mUSDC) · fee 0.30%</label>
+      <input id="harca-miktar" type="number" placeholder="1000" min="0">
+      <button class="eylem birincil" id="harca">Spend</button>
+    </div>
+  </div>
+
+  <div class="akis">
+    <h2>Live settlement flow</h2>
+    <div class="adimlar">
+      <div class="adim" id="a1">1 · Lock on Sepolia</div>
+      <div class="adim" id="a2">2 · Attestcoin proof → limit</div>
+      <div class="adim" id="a3">3 · Instant spend on Creditcoin</div>
+      <div class="adim" id="a4">4 · Escrow auto-deduction</div>
+      <div class="adim" id="a5">5 · Deduction proven, settled</div>
+    </div>
+    <div id="gunluk">Connect a wallet to begin. Configure addresses in karun-config.js.</div>
+  </div>
+
+  <footer>
+    Karun · BUIDL CTC 2026 Fall · Creditcoin testnet 102031 + Sepolia · <a href="https://github.com/Foreveranka/karun" target="_blank">GitHub</a>
+  </footer>
+</div>
+
+<script src="karun-config.js"></script>
+<script src="karun-app.js"></script>
+</body>
+</html>
