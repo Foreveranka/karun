@@ -22,9 +22,9 @@ window.KARUN = {
       chainIdHex: "0xaa36a7", // 11155111
       rpc: "https://ethereum-sepolia-rpc.publicnode.com",
       explorer: "https://sepolia.etherscan.io",
-      usdc: "",
-      escrow: "",   // teminat ucu
-      spender: "",  // odeme ucu
+      usdc: "0xb7d89dD5b11814E73995602F90603ddd893107bB",
+      escrow: "0x07BEf458F5AF8D041e8ac497B2f4528eEec3D855",   // teminat ucu
+      spender: "0xD819c276908A910659a5cc9315ee25b8a6287953",  // odeme ucu
       teminat: true,
       odeme: true,
       not: "Ethereum testnet",
