@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Karun Docs</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🪙</text></svg>">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+:root{
+  --bg:#f5f5f7; --yuzey:#fff; --murekkep:#1d1d1f; --ikincil:#6e6e73; --ucuncul:#aeaeb2;
+  --cizgi:rgba(0,0,0,.08); --vurgu:#b07a1e; --vurgu-acik:rgba(176,122,30,.09);
+  --kod-zemin:#f5f5f7; --yesil:#248a3d;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-font-smoothing:antialiased;scroll-behavior:smooth}
+body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Helvetica,Arial,sans-serif;
+  background:var(--yuzey);color:var(--murekkep)}
+
+/* ust cubuk */
+header.tepe{background:var(--yuzey);border-bottom:1px solid var(--cizgi);position:sticky;top:0;z-index:50}
+.tepe-ic{max-width:1400px;margin:0 auto;padding:0 28px;display:flex;align-items:center;gap:26px;height:60px}
+.marka{display:flex;align-items:center;gap:9px;font-weight:700;font-size:17px;letter-spacing:-.3px;
+  text-decoration:none;color:var(--murekkep)}
+.marka .pul{font-size:20px}
+nav.sekmeler{display:flex;gap:4px}
+.gez{padding:8px 14px;border-radius:980px;font-size:14px;font-weight:500;color:var(--ikincil);
+  text-decoration:none;transition:background .12s,color .12s}
+.gez:hover{background:var(--bg)}
+.gez.secili{background:var(--murekkep);color:#fff;font-weight:600}
+.tepe-sag{margin-left:auto;display:flex;align-items:center;gap:12px}
+#ara{width:230px;padding:8px 13px;border:1px solid var(--cizgi);border-radius:10px;font-family:inherit;
+  font-size:13.5px;outline:none;background:var(--bg);color:var(--murekkep)}
+#ara:focus{border-color:var(--vurgu);background:var(--yuzey)}
+.ag-rozeti{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--yesil);
+  background:rgba(36,138,61,.1);border-radius:20px;padding:4px 11px;white-space:nowrap}
+.ag-rozeti::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--yesil)}
+
+/* uc kolonlu duzen */
+.duzen{max-width:1400px;margin:0 auto;display:grid;grid-template-columns:264px minmax(0,1fr) 232px;
+  gap:0;align-items:start}
+
+/* sol menu */
+aside.yan{position:sticky;top:60px;height:calc(100vh - 60px);overflow-y:auto;padding:28px 20px 40px;
+  border-right:1px solid var(--cizgi)}
+.yan-baslik{font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--ucuncul);padding:0 12px 10px}
+.yan a{display:block;padding:8px 12px;margin:1px 0;border-radius:8px;font-size:14px;
+  color:var(--ikincil);text-decoration:none;line-height:1.35;transition:background .12s}
+.yan a:hover{background:var(--bg);color:var(--murekkep)}
+.yan a.secili{background:var(--vurgu-acik);color:var(--vurgu);font-weight:600}
+.yan-ayrac{height:1px;background:var(--cizgi);margin:18px 12px}
+.yan-dis{display:block;padding:8px 12px;font-size:13px;color:var(--ucuncul);text-decoration:none}
+.yan-dis:hover{color:var(--vurgu)}
+
+/* icerik */
+main{padding:40px 56px 100px;min-width:0}
+.kirinti{font-size:13px;color:var(--ucuncul);margin-bottom:14px}
+.kirinti a{color:var(--vurgu);text-decoration:none}
+h1{font-size:38px;font-weight:700;letter-spacing:-1px;line-height:1.15}
+.alt-baslik{font-size:17px;color:var(--ikincil);margin-top:12px;line-height:1.5}
+article{margin-top:34px;font-size:15.5px;line-height:1.7;color:#2b2b2f}
+article h2{font-size:24px;font-weight:700;letter-spacing:-.4px;margin:44px 0 14px;
+  scroll-margin-top:80px;color:var(--murekkep)}
+article h3{font-size:18px;font-weight:600;margin:32px 0 10px;scroll-margin-top:80px}
+article h4{font-size:15.5px;font-weight:600;margin:24px 0 8px}
+article p{margin:14px 0}
+article ul,article ol{margin:14px 0 14px 22px}
+article li{margin:7px 0}
+article a{color:var(--vurgu);text-decoration:none;border-bottom:1px solid rgba(176,122,30,.3)}
+article a:hover{border-bottom-color:var(--vurgu)}
+article code{background:var(--kod-zemin);border:1px solid var(--cizgi);border-radius:5px;
+  padding:1.5px 5px;font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:13px;
+  color:#8a5a0f;white-space:nowrap}
+article pre{background:#1d1d1f;color:#e8e8ed;border-radius:12px;padding:20px 22px;overflow-x:auto;
+  margin:20px 0;font-size:13px;line-height:1.65}
+article pre code{background:none;border:none;padding:0;color:inherit;white-space:pre;font-size:13px}
+article pre.mermaid{background:var(--bg);border:1px solid var(--cizgi);color:var(--murekkep);
+  text-align:center;padding:26px}
+article blockquote{border-left:3px solid var(--vurgu);background:var(--vurgu-acik);
+  padding:14px 18px;margin:20px 0;border-radius:0 10px 10px 0;font-size:14.5px;color:#4a3a1c}
+article blockquote strong{color:#3a2c12}
+.tablo-sar{overflow-x:auto;margin:20px 0;border:1px solid var(--cizgi);border-radius:12px}
+article table{width:100%;border-collapse:collapse;font-size:14px}
+article th{text-align:left;font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;
+  color:var(--ucuncul);padding:11px 14px;background:var(--bg);border-bottom:1px solid var(--cizgi);
+  white-space:nowrap}
+article td{padding:12px 14px;border-bottom:1px solid var(--cizgi);vertical-align:top}
+article tbody tr:last-child td{border-bottom:none}
+article table code{white-space:nowrap}
+
+/* sayfa gecisi */
+.sayfa-gecis{display:flex;gap:14px;margin-top:60px;padding-top:26px;border-top:1px solid var(--cizgi)}
+.gecis{flex:1;padding:16px 18px;border:1px solid var(--cizgi);border-radius:12px;text-decoration:none;
+  color:var(--murekkep);transition:border-color .15s}
+.gecis:hover{border-color:var(--vurgu)}
+.gecis .yon{font-size:12px;color:var(--ucuncul)}
+.gecis .ad{font-size:15px;font-weight:600;margin-top:3px}
+.gecis.ileri{text-align:right}
+
+/* sag: bu sayfada */
+aside.icindekiler{position:sticky;top:60px;height:calc(100vh - 60px);overflow-y:auto;
+  padding:44px 20px 40px 8px}
+.ic-baslik{font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--ucuncul);margin-bottom:12px;display:flex;align-items:center;gap:7px}
+.icindekiler a{display:block;padding:6px 10px;font-size:13px;color:var(--ikincil);
+  text-decoration:none;line-height:1.4;border-left:2px solid transparent;transition:color .12s}
+.icindekiler a:hover{color:var(--murekkep)}
+.icindekiler a.aktif{color:var(--vurgu);border-left-color:var(--vurgu);font-weight:500}
+
+@media(max-width:1180px){
+  .duzen{grid-template-columns:240px minmax(0,1fr)}
+  aside.icindekiler{display:none}
+  main{padding:36px 32px 80px}
+}
+@media(max-width:860px){
+  .duzen{grid-template-columns:1fr}
+  aside.yan{position:static;height:auto;border-right:none;border-bottom:1px solid var(--cizgi);
+    padding:16px 16px 20px}
+  main{padding:28px 18px 60px}
+  h1{font-size:30px}
+  #ara{width:150px}
+  .tepe-ic{padding:0 16px;gap:14px}
+}
+</style>
+</head>
+<body>
+<header class="tepe">
+  <div class="tepe-ic">
+    <a class="marka" href="/"><span class="pul">🪙</span>Karun</a>
+    <nav class="sekmeler">
+      <a class="gez" href="/">App</a>
+      <a class="gez secili" href="/docs">Docs</a>
+    </nav>
+    <div class="tepe-sag">
+      <input id="ara" type="search" placeholder="Search docs…" autocomplete="off">
+      <span class="ag-rozeti">Live on testnet</span>
+    </div>
+  </div>
+</header>
+
+<div class="duzen">
+  <aside class="yan">
+    <div class="yan-baslik">Documentation</div>
+    <div id="menu"></div>
+    <div class="yan-ayrac"></div>
+    <a class="yan-dis" href="/">Open the app ↗</a>
+    <a class="yan-dis" href="https://creditcoin-testnet.blockscout.com/address/0xb7d89dD5b11814E73995602F90603ddd893107bB" target="_blank" rel="noopener">Ledger on Blockscout ↗</a>
+  </aside>
+
+  <main>
+    <div class="kirinti"><a href="/docs">Karun Docs</a></div>
+    <h1 id="baslik">…</h1>
+    <div class="alt-baslik" id="alt-baslik"></div>
+    <article id="icerik"></article>
+    <div class="sayfa-gecis" id="gecis"></div>
+  </main>
+
+  <aside class="icindekiler">
+    <div class="ic-baslik">On this page</div>
+    <div id="icindekiler"></div>
+  </aside>
+</div>
+
+<script src="docs-icerik.js"></script>
+<script src="docs-app.js"></script>
+</body>
+</html>
