@@ -1,6 +1,6 @@
-/* Karun demo arayuzu: MetaMask + ethers v6.
-   Kullanici dostu: bakiye gostergeleri, komisyon onizlemesi, dogrulama,
-   mesgul durumlari, anlasilir hata mesajlari, kesif baglantilari. */
+/* Karun urun paneli: MetaMask + ethers v6.
+   Mimari: Creditcoin HAKEM (limit + kanit). Odeme, secilen hedef zincirdeki
+   KarunSpender havuzundan cikar; kullaniciya sarmalanmis token verilmez. */
 "use strict";
 
 const C = window.KARUN;
@@ -16,34 +16,34 @@ const USDC_ABI = [
   "function allowance(address, address) view returns (uint256)",
   "function balanceOf(address) view returns (uint256)",
 ];
+const SPENDER_ABI = ["function liquidity() view returns (uint256)"];
 const LEDGER_ABI = [
   "function collateral(address, uint64) view returns (uint256)",
-  "function creditLimit(address) view returns (uint256)",
   "function available(address) view returns (uint256)",
   "function outstanding(address) view returns (uint256)",
   "function feeBps() view returns (uint16)",
-  "function spend(address recipient, uint256 amount, uint64 chainKey) external returns (bytes32)",
+  "function requestPayment(address alici, uint256 tutar, uint64 hedefZincir, uint64 kaynakZincir) external returns (bytes32)",
   "event CollateralSynced(address indexed user, uint64 indexed chainKey, uint256 totalLocked, bytes32 queryId)",
-  "event SpendExecuted(address indexed user, address indexed recipient, uint256 amount, uint256 fee, bytes32 indexed claimId)",
-  "event ClaimSettled(bytes32 indexed claimId, address indexed user, uint256 amount, bytes32 queryId)",
+  "event PaymentAuthorized(bytes32 indexed claimId, address indexed user, uint64 indexed hedefZincir, address alici, uint256 tutar, uint256 komisyon, uint64 kaynakZincir)",
+  "event PaymentProven(bytes32 indexed claimId, uint64 indexed hedefZincir, uint256 tutar, bytes32 queryId)",
+  "event ClaimSettled(bytes32 indexed claimId, address indexed user, uint256 toplam, bytes32 queryId)",
 ];
 
-/* Kontrat revert nedenlerini insan diline cevir. */
 const HATA_SOZLUGU = [
-  ["limit yetersiz", "Amount exceeds your spendable limit. Lock more collateral or spend less."],
-  ["havuz likiditesi", "The Karun pool doesn't have enough liquidity right now. Try a smaller amount."],
-  ["zincir teminati", "Not enough collateral on that source chain to settle this spend."],
-  ["mUSDC: allowance", "Token approval missing — approve the escrow first (the Lock button does this automatically)."],
-  ["mUSDC: balance", "Insufficient mUSDC balance. Use the faucet button to mint test tokens."],
+  ["limit yetersiz", "Amount exceeds your spendable balance. Lock more collateral or send less."],
+  ["havuz likiditesi", "That chain's Karun pool is short on liquidity. Try a smaller amount or another chain."],
+  ["zincir teminati", "Not enough collateral on the source chain to settle this payment."],
+  ["odeme zinciri kapali", "Payments on that chain aren't live yet."],
+  ["teminat zinciri kapali", "Collateral on that chain isn't live yet."],
+  ["mUSDC: allowance", "Token approval missing — the Lock button handles this automatically."],
+  ["mUSDC: balance", "Insufficient mUSDC. Use the faucet to mint test tokens."],
   ["bekleme suresi", "The unlock delay hasn't passed yet."],
   ["user rejected", "You rejected the transaction in your wallet."],
-  ["insufficient funds", "Not enough gas token in your wallet (Sepolia ETH / tCTC)."],
+  ["insufficient funds", "Not enough gas token in your wallet."],
 ];
 function hataCevir(hata) {
   const ham = String(hata?.shortMessage || hata?.message || hata);
-  for (const [anahtar, mesaj] of HATA_SOZLUGU) {
-    if (ham.toLowerCase().includes(anahtar.toLowerCase())) return mesaj;
-  }
+  for (const [anahtar, mesaj] of HATA_SOZLUGU) if (ham.toLowerCase().includes(anahtar.toLowerCase())) return mesaj;
   return ham.length > 140 ? ham.slice(0, 140) + "…" : ham;
 }
 
@@ -51,13 +51,22 @@ let tarayiciSaglayici = null;
 let hesap = null;
 let feeBpsDeger = 30n;
 const ccOkuyucu = new ethers.JsonRpcProvider(C.creditcoin.rpc);
-const sepOkuyucu = new ethers.JsonRpcProvider(C.sepolia.rpc);
+
+const okuyucular = {};
+function okuyucu(z) {
+  if (!z || !z.rpc) return null;
+  if (!okuyucular[z.key]) okuyucular[z.key] = new ethers.JsonRpcProvider(z.rpc);
+  return okuyucular[z.key];
+}
+const teminatZinciri = () => C.zincirler.find((z) => z.teminat && z.escrow);
+const zincirBul = (key) => C.zincirler.find((z) => z.key === key);
 
 const $ = (s) => document.querySelector(s);
 const birim = (v) => Number(ethers.formatUnits(v, 6)).toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 function gunluk(mesaj, tur) {
   const g = $("#gunluk");
+  if (!g) return;
   const zaman = new Date().toLocaleTimeString("en-GB");
   const sinif = tur === "ok" ? "ok" : tur === "hata" ? "hata" : tur === "bekle" ? "bekle" : "";
   g.innerHTML += `\n<span class="${sinif}">[${zaman}] ${mesaj}</span>`;
@@ -69,32 +78,24 @@ function adim(no, durum) {
   el.classList.remove("aktif", "tamam");
   if (durum) el.classList.add(durum);
 }
-function adimlariSifirla() {
-  for (let i = 1; i <= 5; i++) adim(i, "");
-}
-function mesgul(dugmeId, acik, yazi) {
-  const d = $(dugmeId);
+function adimlariSifirla() { for (let i = 1; i <= 5; i++) adim(i, ""); }
+function mesgul(id, acik, yazi) {
+  const d = $(id);
   if (!d) return;
-  if (acik) {
-    d.dataset.eski = d.textContent;
-    d.textContent = yazi || "Waiting for wallet…";
-    d.disabled = true;
-  } else {
-    d.textContent = d.dataset.eski || d.textContent;
-    d.disabled = false;
-  }
+  if (acik) { d.dataset.eski = d.textContent; d.textContent = yazi || "Waiting…"; d.disabled = true; }
+  else { d.textContent = d.dataset.eski || d.textContent; d.disabled = false; }
 }
-function kesifLink(zincir, hash) {
-  const kok = zincir === "sepolia" ? C.sepolia.explorer : C.creditcoin.explorer;
+function kesifLink(z, hash) {
+  const kok = z && z.explorer ? z.explorer : C.creditcoin.explorer;
   return `<a href="${kok}/tx/${hash}" target="_blank" rel="noopener">${hash.slice(0, 10)}…↗</a>`;
 }
-
 function yapilandirmaTamam() {
-  return C.sepolia.escrow && C.sepolia.usdc && C.creditcoin.ledger && C.creditcoin.usdc;
+  const t = teminatZinciri();
+  return !!(C.creditcoin.ledger && t && t.usdc && t.escrow && t.spender);
 }
 
 async function agSec(hedef) {
-  const istenen = hedef === "sepolia" ? C.sepolia : C.creditcoin;
+  const istenen = hedef === "creditcoin" ? C.creditcoin : hedef;
   try {
     await tarayiciSaglayici.send("wallet_switchEthereumChain", [{ chainId: istenen.chainIdHex }]);
   } catch (hata) {
@@ -102,9 +103,9 @@ async function agSec(hedef) {
     if (kod === 4902) {
       await tarayiciSaglayici.send("wallet_addEthereumChain", [{
         chainId: istenen.chainIdHex,
-        chainName: hedef === "sepolia" ? "Sepolia" : istenen.adSoyad,
+        chainName: hedef === "creditcoin" ? C.creditcoin.adSoyad : istenen.ad,
         rpcUrls: [istenen.rpc],
-        nativeCurrency: hedef === "sepolia" ? { name: "Sepolia ETH", symbol: "ETH", decimals: 18 } : istenen.paraBirimi,
+        nativeCurrency: istenen.paraBirimi,
         blockExplorerUrls: [istenen.explorer],
       }]);
     } else throw hata;
@@ -112,29 +113,81 @@ async function agSec(hedef) {
   return tarayiciSaglayici.getSigner();
 }
 
+function zincirListesiCiz(kapId, teminatlar, likiditeler) {
+  const kap = $(kapId);
+  if (!kap) return;
+  kap.innerHTML = C.zincirler.map((z) => {
+    const canli = !!(z.escrow || z.spender);
+    const roller = [];
+    if (z.teminat && z.escrow) roller.push("collateral");
+    if (z.odeme && z.spender) roller.push("payouts");
+    const tutar = canli && teminatlar && teminatlar[z.key] != null ? "$" + birim(teminatlar[z.key]) : "—";
+    const alt = canli
+      ? `<div class="z-durum canli">Live · ${roller.join(" + ")}</div>`
+      : `<div class="z-durum yakinda">${z.not}</div>`;
+    const detay = canli && likiditeler && likiditeler[z.key] != null
+      ? `<div class="z-detay">Pool $${birim(likiditeler[z.key])}</div>`
+      : `<div class="z-detay">${canli ? z.not : "Coming soon"}</div>`;
+    return `<div class="zincir-satir${canli ? "" : " soluk"}">
+      <div class="z-logo">${z.simge}</div>
+      <div><div class="z-ad">${z.ad}</div>${detay}</div>
+      <div class="z-sag"><div class="z-tutar">${tutar}</div>${alt}</div>
+    </div>`;
+  }).join("");
+}
+
+function hedefSeciciCiz() {
+  const kap = $("#hedef-secici");
+  if (!kap) return;
+  kap.innerHTML = C.zincirler.map((z) => {
+    const acik = !!(z.odeme && z.spender);
+    return `<button type="button" class="hedef${acik ? "" : " kapali"}" data-key="${z.key ?? ""}" ${acik ? "" : "disabled"}>
+      <span class="h-simge">${z.simge}</span>${z.ad}${acik ? "" : '<span class="h-yakinda">soon</span>'}
+    </button>`;
+  }).join("");
+  const ilk = kap.querySelector(".hedef:not(.kapali)");
+  if (ilk) ilk.classList.add("secili");
+  kap.querySelectorAll(".hedef:not(.kapali)").forEach((d) => {
+    d.onclick = () => {
+      kap.querySelectorAll(".hedef").forEach((x) => x.classList.remove("secili"));
+      d.classList.add("secili");
+      harcamaOnizle();
+    };
+  });
+}
+function seciliHedefKey() {
+  const el = $("#hedef-secici .hedef.secili");
+  return el ? Number(el.dataset.key) : null;
+}
+
 async function tazele() {
   if (!hesap || !yapilandirmaTamam()) return;
   try {
     const ledger = new ethers.Contract(C.creditcoin.ledger, LEDGER_ABI, ccOkuyucu);
-    const escrow = new ethers.Contract(C.sepolia.escrow, ESCROW_ABI, sepOkuyucu);
-    const usdcSep = new ethers.Contract(C.sepolia.usdc, USDC_ABI, sepOkuyucu);
-    const usdcCc = new ethers.Contract(C.creditcoin.usdc, USDC_ABI, ccOkuyucu);
-    const [kilit, attested, limit, borc, cuzdanBakiye, havuz] = await Promise.all([
+    const t = teminatZinciri();
+    const saglayici = okuyucu(t);
+    const escrow = new ethers.Contract(t.escrow, ESCROW_ABI, saglayici);
+    const usdc = new ethers.Contract(t.usdc, USDC_ABI, saglayici);
+    const spender = new ethers.Contract(t.spender, SPENDER_ABI, saglayici);
+
+    const [kilit, attested, limit, borc, cuzdanBakiye, likidite] = await Promise.all([
       escrow.locked(hesap),
-      ledger.collateral(hesap, C.chainKey),
+      ledger.collateral(hesap, t.key),
       ledger.available(hesap),
       ledger.outstanding(hesap),
-      usdcSep.balanceOf(hesap),
-      usdcCc.balanceOf(C.creditcoin.ledger),
+      usdc.balanceOf(hesap),
+      spender.liquidity(),
     ]);
+
+    $("#o-limit").textContent = "$" + birim(limit);
     $("#o-kilit").textContent = "$" + birim(kilit);
     $("#o-attested").textContent = "$" + birim(attested);
-    $("#o-limit").textContent = "$" + birim(limit);
     $("#o-borc").textContent = "$" + birim(borc);
-    $("#b-cuzdan").textContent = "$" + birim(cuzdanBakiye);
-    $("#b-havuz").textContent = "$" + birim(havuz);
-    zincirListesiCiz("#zincir-listesi", { 1: attested });
-    zincirListesiCiz("#zincir-listesi-2", { 1: attested });
+    if ($("#b-cuzdan")) $("#b-cuzdan").textContent = "$" + birim(cuzdanBakiye);
+    if ($("#b-havuz")) $("#b-havuz").textContent = "$" + birim(likidite);
+
+    zincirListesiCiz("#zincir-listesi", { [t.key]: attested }, { [t.key]: likidite });
+    zincirListesiCiz("#zincir-listesi-2", { [t.key]: attested }, { [t.key]: likidite });
     harcamaOnizle();
     gecmisYukle();
   } catch (hata) {
@@ -144,42 +197,16 @@ async function tazele() {
 
 function harcamaOnizle() {
   const el = $("#harca-onizleme");
+  if (!el) return;
   const deger = $("#harca-miktar").value;
-  if (!deger || Number(deger) <= 0) { el.textContent = ""; return; }
+  const hedef = zincirBul(seciliHedefKey());
+  if (!deger || Number(deger) <= 0 || !hedef) { el.textContent = ""; return; }
   try {
     const miktar = ethers.parseUnits(deger, 6);
     const fee = (miktar * feeBpsDeger) / 10000n;
-    el.textContent = `Recipient gets ${birim(miktar)} now · ${birim(miktar + fee)} will be auto-deducted from your escrow (fee ${birim(fee)})`;
+    const kaynak = teminatZinciri();
+    el.textContent = `Recipient receives $${birim(miktar)} on ${hedef.ad} · $${birim(miktar + fee)} auto-deducted from your ${kaynak ? kaynak.ad : "source"} collateral (fee $${birim(fee)})`;
   } catch { el.textContent = ""; }
-}
-
-
-/* ── Zincir vizyonu: bugun canli olan + yol haritasindakiler ── */
-const ZINCIRLER = [
-  { ad: "Sepolia", kisa: "SEP", simge: "Ξ", key: 1, canli: true, not: "Ethereum testnet" },
-  { ad: "Ethereum", kisa: "ETH", simge: "Ξ", key: 3, canli: false, not: "attested by Attestcoin" },
-  { ad: "Base", kisa: "BASE", simge: "B", key: null, canli: false, not: "roadmap" },
-  { ad: "Arbitrum", kisa: "ARB", simge: "A", key: null, canli: false, not: "roadmap" },
-  { ad: "Polygon", kisa: "POL", simge: "P", key: null, canli: false, not: "roadmap" },
-];
-
-function zincirListesiCiz(kapId, teminatlar) {
-  const kap = $(kapId);
-  if (!kap) return;
-  kap.innerHTML = ZINCIRLER.map((z) => {
-    const tutar = z.canli && teminatlar ? "$" + birim(teminatlar[z.key] || 0n) : "—";
-    const durum = z.canli
-      ? '<div class="z-durum canli">Live · proven on Creditcoin</div>'
-      : `<div class="z-durum yakinda">${z.not}</div>`;
-    return `<div class="zincir-satir${z.canli ? "" : " soluk"}">
-      <div class="z-logo">${z.simge}</div>
-      <div>
-        <div class="z-ad">${z.ad}</div>
-        <div class="z-detay">${z.canli ? z.not : "Coming soon"}</div>
-      </div>
-      <div class="z-sag"><div class="z-tutar">${tutar}</div>${durum}</div>
-    </div>`;
-  }).join("");
 }
 
 function zamanKisa(saniye) {
@@ -191,7 +218,6 @@ function zamanKisa(saniye) {
   return Math.floor(fark / 86400) + "d ago";
 }
 
-/* Odeme ve aktivite gecmisini zincirden oku. */
 async function gecmisYukle() {
   if (!hesap || !yapilandirmaTamam()) return;
   try {
@@ -199,80 +225,74 @@ async function gecmisYukle() {
     const guncel = await ccOkuyucu.getBlockNumber();
     const bastan = Math.max(0, guncel - 45_000);
 
-    const [harcamalar, kapananlar, senkronlar] = await Promise.all([
-      ledger.queryFilter(ledger.filters.SpendExecuted(hesap), bastan, guncel),
+    const [talepler, odenenler, kapananlar, senkronlar] = await Promise.all([
+      ledger.queryFilter(ledger.filters.PaymentAuthorized(null, hesap), bastan, guncel),
+      ledger.queryFilter(ledger.filters.PaymentProven(), bastan, guncel),
       ledger.queryFilter(ledger.filters.ClaimSettled(null, hesap), bastan, guncel),
       ledger.queryFilter(ledger.filters.CollateralSynced(hesap), bastan, guncel),
     ]);
 
-    const kapaliTalepler = new Set(kapananlar.map((o) => o.args[0]));
+    const odendi = new Set(odenenler.map((o) => o.args[0]));
+    const kapandi = new Set(kapananlar.map((o) => o.args[0]));
     const bloklar = new Map();
     async function blokZamani(no) {
       if (!bloklar.has(no)) bloklar.set(no, (await ccOkuyucu.getBlock(no))?.timestamp ?? 0);
       return bloklar.get(no);
     }
 
-    /* ── odemeler tablosu ── */
     const satirlar = [];
-    for (const o of [...harcamalar].reverse()) {
-      const [, alici, tutar, komisyon, claimId] = o.args;
-      const kapali = kapaliTalepler.has(claimId);
+    for (const o of [...talepler].reverse()) {
+      const [claimId, , hedefKey, alici, tutar, komisyon] = o.args;
+      const hedef = zincirBul(Number(hedefKey));
+      const durum = kapandi.has(claimId) ? ["tamam", "Settled"]
+        : odendi.has(claimId) ? ["bekliyor", "Paid · settling"] : ["bekliyor", "Sending"];
       satirlar.push(`<tr>
-        <td><div>${zamanKisa(await blokZamani(o.blockNumber))}</div><div class="kucuk">${kapali ? "settled" : "settling"}</div></td>
+        <td>${zamanKisa(await blokZamani(o.blockNumber))}</td>
         <td class="mono">${alici.slice(0, 10)}…${alici.slice(-4)}</td>
+        <td>${hedef ? hedef.ad : "chain " + hedefKey}</td>
         <td><b>$${birim(tutar)}</b><div class="kucuk">fee $${birim(komisyon)}</div></td>
-        <td><span class="rozet ${kapali ? "tamam" : "bekliyor"}">${kapali ? "Settled" : "In flight"}</span></td>
+        <td><span class="rozet ${durum[0]}">${durum[1]}</span></td>
         <td><a href="${C.creditcoin.explorer}/tx/${o.transactionHash}" target="_blank" rel="noopener">View ↗</a></td>
       </tr>`);
     }
-    const odemeTablosu = satirlar.length
-      ? `<table><thead><tr><th>When</th><th>To</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>${satirlar.join("")}</tbody></table>`
-      : '<div class="tablo-bos">No payments yet — send one from Overview</div>';
-    if ($("#tablo-odemeler")) $("#tablo-odemeler").innerHTML = odemeTablosu;
+    const basliklar = "<thead><tr><th>When</th><th>To</th><th>Paid on</th><th>Amount</th><th>Status</th><th></th></tr></thead>";
+    const tablo = satirlar.length ? `<table>${basliklar}<tbody>${satirlar.join("")}</tbody></table>`
+      : '<div class="tablo-bos">No payments yet</div>';
+    if ($("#tablo-odemeler")) $("#tablo-odemeler").innerHTML = tablo;
     if ($("#son-odemeler")) {
       $("#son-odemeler").innerHTML = satirlar.length
-        ? `<table><thead><tr><th>When</th><th>To</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>${satirlar.slice(0, 4).join("")}</tbody></table>`
+        ? `<table>${basliklar}<tbody>${satirlar.slice(0, 4).join("")}</tbody></table>`
         : '<div class="tablo-bos">No payments yet</div>';
     }
 
-    /* ── aktivite: tum kanitlanmis olaylar ── */
     const olaylar = [];
     for (const o of senkronlar) olaylar.push({ blok: o.blockNumber, tur: "Collateral proven",
-      detay: "$" + birim(o.args[2]) + " total locked, verified via Attestcoin", hash: o.transactionHash });
-    for (const o of harcamalar) olaylar.push({ blok: o.blockNumber, tur: "Payment sent",
-      detay: "$" + birim(o.args[2]) + " to " + o.args[1].slice(0, 10) + "…", hash: o.transactionHash });
+      detay: "$" + birim(o.args[2]) + " locked, verified via Attestcoin", hash: o.transactionHash });
+    for (const o of talepler) olaylar.push({ blok: o.blockNumber, tur: "Payment authorized",
+      detay: "$" + birim(o.args[4]) + " to " + o.args[3].slice(0, 10) + "… on " + (zincirBul(Number(o.args[2]))?.ad ?? o.args[2]), hash: o.transactionHash });
+    for (const o of odenenler) olaylar.push({ blok: o.blockNumber, tur: "Payout proven",
+      detay: "$" + birim(o.args[2]) + " confirmed on " + (zincirBul(Number(o.args[1]))?.ad ?? o.args[1]), hash: o.transactionHash });
     for (const o of kapananlar) olaylar.push({ blok: o.blockNumber, tur: "Deduction proven",
-      detay: "$" + birim(o.args[2]) + " deducted from escrow, claim settled", hash: o.transactionHash });
+      detay: "$" + birim(o.args[2]) + " deducted, claim settled", hash: o.transactionHash });
     olaylar.sort((a, b) => b.blok - a.blok);
 
-    const aktiviteSatirlari = [];
+    const aktivite = [];
     for (const e of olaylar) {
-      aktiviteSatirlari.push(`<tr>
-        <td>${zamanKisa(await blokZamani(e.blok))}</td>
-        <td><b>${e.tur}</b></td>
+      aktivite.push(`<tr><td>${zamanKisa(await blokZamani(e.blok))}</td><td><b>${e.tur}</b></td>
         <td class="kucuk">${e.detay}</td>
-        <td><a href="${C.creditcoin.explorer}/tx/${e.hash}" target="_blank" rel="noopener">View ↗</a></td>
-      </tr>`);
+        <td><a href="${C.creditcoin.explorer}/tx/${e.hash}" target="_blank" rel="noopener">View ↗</a></td></tr>`);
     }
     if ($("#tablo-aktivite")) {
-      $("#tablo-aktivite").innerHTML = aktiviteSatirlari.length
-        ? `<table><thead><tr><th>When</th><th>Event</th><th>Detail</th><th></th></tr></thead><tbody>${aktiviteSatirlari.join("")}</tbody></table>`
+      $("#tablo-aktivite").innerHTML = aktivite.length
+        ? `<table><thead><tr><th>When</th><th>Event</th><th>Detail</th><th></th></tr></thead><tbody>${aktivite.join("")}</tbody></table>`
         : '<div class="tablo-bos">No activity yet</div>';
     }
-  } catch (hata) {
-    /* gecmis okunamazsa sessiz gec: ana akis etkilenmesin */
-  }
+  } catch { /* gecmis okunamazsa ana akis etkilenmesin */ }
 }
 
 async function baglan() {
-  if (!window.ethereum) {
-    gunluk("MetaMask not found. Install it from metamask.io and refresh.", "hata");
-    return;
-  }
-  if (!yapilandirmaTamam()) {
-    gunluk("Contracts are not deployed yet — addresses missing in karun-config.js.", "hata");
-    return;
-  }
+  if (!window.ethereum) { gunluk("MetaMask not found. Install it and refresh.", "hata"); return; }
+  if (!yapilandirmaTamam()) { gunluk("Contracts are not deployed yet.", "hata"); return; }
   try {
     mesgul("#baglan", true, "Connecting…");
     tarayiciSaglayici = new ethers.BrowserProvider(window.ethereum);
@@ -285,12 +305,10 @@ async function baglan() {
     gunluk("Wallet connected: " + hesap, "ok");
 
     try {
-      const ledger = new ethers.Contract(C.creditcoin.ledger, LEDGER_ABI, ccOkuyucu);
-      feeBpsDeger = BigInt(await ledger.feeBps());
-    } catch { /* varsayilan %0,30 kalir */ }
+      feeBpsDeger = BigInt(await new ethers.Contract(C.creditcoin.ledger, LEDGER_ABI, ccOkuyucu).feeBps());
+    } catch {}
 
     window.ethereum.on?.("accountsChanged", () => location.reload());
-
     dinleyicileriKur();
     tazele();
     setInterval(tazele, 12_000);
@@ -304,132 +322,134 @@ function dinleyicileriKur() {
   const ledger = new ethers.Contract(C.creditcoin.ledger, LEDGER_ABI, ccOkuyucu);
   ledger.on(ledger.getEvent("CollateralSynced"), (user, chainKey, total) => {
     if (user.toLowerCase() !== hesap.toLowerCase()) return;
-    gunluk(`✔ Attestcoin proof verified on Creditcoin — collateral synced to ${birim(total)} mUSDC`, "ok");
-    adim(2, "tamam");
-    tazele();
+    gunluk(`✔ Attestcoin proof verified — collateral synced to $${birim(total)}`, "ok");
+    adim(2, "tamam"); tazele();
   });
-  ledger.on(ledger.getEvent("SpendExecuted"), (user, recipient, amount, fee, claimId) => {
+  ledger.on(ledger.getEvent("PaymentAuthorized"), (claimId, user, hedefKey, alici, tutar) => {
     if (user.toLowerCase() !== hesap.toLowerCase()) return;
-    gunluk(`✔ Spent ${birim(amount)} mUSDC → ${recipient.slice(0, 8)}… (fee ${birim(fee)}), claim ${claimId.slice(0, 10)}…`, "ok");
-    adim(3, "tamam"); adim(4, "aktif");
-    gunluk("Escrow auto-deduction on Sepolia is in progress…", "bekle");
-    tazele();
+    const hedef = zincirBul(Number(hedefKey));
+    gunluk(`✔ Payment authorized: $${birim(tutar)} to ${alici.slice(0, 8)}… on ${hedef ? hedef.ad : hedefKey}`, "ok");
+    adim(3, "aktif"); tazele();
   });
-  ledger.on(ledger.getEvent("ClaimSettled"), (claimId, user, amount) => {
+  ledger.on(ledger.getEvent("PaymentProven"), (claimId, hedefKey, tutar) => {
+    const hedef = zincirBul(Number(hedefKey));
+    gunluk(`✔ Payout proven on ${hedef ? hedef.ad : hedefKey}: recipient received $${birim(tutar)}`, "ok");
+    adim(3, "tamam"); adim(4, "aktif"); tazele();
+  });
+  ledger.on(ledger.getEvent("ClaimSettled"), (claimId, user, toplam) => {
     if (user.toLowerCase() !== hesap.toLowerCase()) return;
-    gunluk(`✔ Deduction of ${birim(amount)} mUSDC proven via Attestcoin — claim settled. No debt remains.`, "ok");
-    adim(4, "tamam"); adim(5, "tamam");
-    tazele();
+    gunluk(`✔ Deduction proven — $${birim(toplam)} settled. No debt remains.`, "ok");
+    adim(4, "tamam"); adim(5, "tamam"); tazele();
   });
 }
 
 async function testParasiAl() {
   if (!hesap) { gunluk("Connect your wallet first.", "hata"); return; }
+  const t = teminatZinciri();
   try {
     mesgul("#faucet", true, "Minting…");
-    const imzaci = await agSec("sepolia");
-    const usdc = new ethers.Contract(C.sepolia.usdc, USDC_ABI, imzaci);
-    gunluk("Minting 10,000 test mUSDC on Sepolia…", "bekle");
+    const imzaci = await agSec(t);
+    const usdc = new ethers.Contract(t.usdc, USDC_ABI, imzaci);
+    gunluk(`Minting 10,000 test mUSDC on ${t.ad}…`, "bekle");
     const islem = await usdc.mint(hesap, ethers.parseUnits("10000", 6));
     await islem.wait();
-    gunluk(`✔ Test mUSDC minted ${kesifLink("sepolia", islem.hash)}`, "ok");
+    gunluk(`✔ Minted ${kesifLink(t, islem.hash)}`, "ok");
     tazele();
   } catch (hata) {
     gunluk("Mint error: " + hataCevir(hata), "hata");
-  } finally {
-    mesgul("#faucet", false);
-  }
+  } finally { mesgul("#faucet", false); }
 }
 
 async function kilitle() {
   if (!hesap) { gunluk("Connect your wallet first.", "hata"); return; }
+  const t = teminatZinciri();
   const deger = $("#kilit-miktar").value;
-  if (!deger || Number(deger) <= 0) { gunluk("Enter a lock amount greater than zero.", "hata"); return; }
+  if (!deger || Number(deger) <= 0) { gunluk("Enter an amount greater than zero.", "hata"); return; }
   let miktar;
-  try { miktar = ethers.parseUnits(deger, 6); }
-  catch { gunluk("Invalid amount.", "hata"); return; }
+  try { miktar = ethers.parseUnits(deger, 6); } catch { gunluk("Invalid amount.", "hata"); return; }
 
   try {
     mesgul("#kilitle", true, "Locking…");
-    adimlariSifirla();
-    adim(1, "aktif");
-    const imzaci = await agSec("sepolia");
-    const usdc = new ethers.Contract(C.sepolia.usdc, USDC_ABI, imzaci);
-    const escrow = new ethers.Contract(C.sepolia.escrow, ESCROW_ABI, imzaci);
+    adimlariSifirla(); adim(1, "aktif");
+    const imzaci = await agSec(t);
+    const usdc = new ethers.Contract(t.usdc, USDC_ABI, imzaci);
+    const escrow = new ethers.Contract(t.escrow, ESCROW_ABI, imzaci);
 
     const bakiye = await usdc.balanceOf(hesap);
     if (bakiye < miktar) {
-      gunluk(`Insufficient mUSDC (you have ${birim(bakiye)}). Use the faucet button.`, "hata");
+      gunluk(`Insufficient mUSDC (you have $${birim(bakiye)}). Use the faucet.`, "hata");
       adim(1, ""); mesgul("#kilitle", false); return;
     }
-
-    const izin = await usdc.allowance(hesap, C.sepolia.escrow);
-    if (izin < miktar) {
+    if ((await usdc.allowance(hesap, t.escrow)) < miktar) {
       gunluk("Approving escrow (one-time)…", "bekle");
-      await (await usdc.approve(C.sepolia.escrow, ethers.MaxUint256)).wait();
-      gunluk("✔ Approved", "ok");
+      await (await usdc.approve(t.escrow, ethers.MaxUint256)).wait();
     }
-    gunluk(`Locking ${deger} mUSDC into escrow on Sepolia…`, "bekle");
+    gunluk(`Locking $${deger} on ${t.ad}…`, "bekle");
     const islem = await escrow.lock(miktar);
     await islem.wait();
-    gunluk(`✔ Locked ${kesifLink("sepolia", islem.hash)}`, "ok");
+    gunluk(`✔ Locked ${kesifLink(t, islem.hash)}`, "ok");
     adim(1, "tamam"); adim(2, "aktif");
-    gunluk("Attestation in progress (~8 min). The worker will prove your lock on Creditcoin automatically — your limit updates when step 2 turns green.", "bekle");
+    gunluk("Attestation in progress (~8 min). Your balance opens once the proof lands on Creditcoin.", "bekle");
     tazele();
   } catch (hata) {
     adim(1, "");
     gunluk("Lock error: " + hataCevir(hata), "hata");
-  } finally {
-    mesgul("#kilitle", false);
-  }
+  } finally { mesgul("#kilitle", false); }
 }
 
 async function harca() {
   if (!hesap) { gunluk("Connect your wallet first.", "hata"); return; }
   const alici = $("#harca-alici").value.trim();
   const deger = $("#harca-miktar").value;
-  if (!ethers.isAddress(alici)) { gunluk("Enter a valid recipient address (0x…).", "hata"); return; }
-  if (!deger || Number(deger) <= 0) { gunluk("Enter a spend amount greater than zero.", "hata"); return; }
+  const hedef = zincirBul(seciliHedefKey());
+  const kaynak = teminatZinciri();
+  if (!ethers.isAddress(alici)) { gunluk("Enter a valid recipient address.", "hata"); return; }
+  if (!deger || Number(deger) <= 0) { gunluk("Enter an amount greater than zero.", "hata"); return; }
+  if (!hedef) { gunluk("Pick a chain to pay on.", "hata"); return; }
   let miktar;
-  try { miktar = ethers.parseUnits(deger, 6); }
-  catch { gunluk("Invalid amount.", "hata"); return; }
+  try { miktar = ethers.parseUnits(deger, 6); } catch { gunluk("Invalid amount.", "hata"); return; }
 
   try {
-    mesgul("#harca", true, "Spending…");
-    adim(3, "aktif");
-
-    // on kontrol: limit yeterli mi (yakinilacak hatayi cuzdana gitmeden soyle)
+    mesgul("#harca", true, "Sending…");
     const ledgerOku = new ethers.Contract(C.creditcoin.ledger, LEDGER_ABI, ccOkuyucu);
     const uygun = await ledgerOku.available(hesap);
     const fee = (miktar * feeBpsDeger) / 10000n;
     if (miktar + fee > uygun) {
-      gunluk(`Amount + fee (${birim(miktar + fee)}) exceeds your limit (${birim(uygun)}).`, "hata");
-      adim(3, ""); mesgul("#harca", false); return;
+      gunluk(`Amount + fee ($${birim(miktar + fee)}) exceeds your balance ($${birim(uygun)}).`, "hata");
+      mesgul("#harca", false); return;
     }
+    try {
+      const likidite = await new ethers.Contract(hedef.spender, SPENDER_ABI, okuyucu(hedef)).liquidity();
+      if (likidite < miktar) {
+        gunluk(`${hedef.ad} pool has only $${birim(likidite)} available. Try a smaller amount.`, "hata");
+        mesgul("#harca", false); return;
+      }
+    } catch {}
 
     const imzaci = await agSec("creditcoin");
     const ledger = new ethers.Contract(C.creditcoin.ledger, LEDGER_ABI, imzaci);
-    gunluk(`Spending ${deger} mUSDC on Creditcoin (recipient is paid instantly from the Karun pool)…`, "bekle");
-    const islem = await ledger.spend(alici, miktar, C.chainKey);
+    gunluk(`Authorizing $${deger} to be paid on ${hedef.ad} (settled from your ${kaynak.ad} collateral)…`, "bekle");
+    const islem = await ledger.requestPayment(alici, miktar, hedef.key, kaynak.key);
     await islem.wait();
-    gunluk(`✔ Spend confirmed ${kesifLink("creditcoin", islem.hash)}`, "ok");
+    gunluk(`✔ Authorized ${kesifLink(null, islem.hash)} — the ${hedef.ad} pool is paying the recipient now`, "ok");
   } catch (hata) {
-    adim(3, "");
-    gunluk("Spend error: " + hataCevir(hata), "hata");
-  } finally {
-    mesgul("#harca", false);
-  }
+    gunluk("Send error: " + hataCevir(hata), "hata");
+  } finally { mesgul("#harca", false); }
 }
 
-// ── baslangic ──
+/* ── baslangic ── */
 $("#baglan").onclick = baglan;
-$("#faucet").onclick = testParasiAl;
-$("#kilitle").onclick = kilitle;
-$("#harca").onclick = harca;
-$("#harca-miktar").addEventListener("input", harcamaOnizle);
+if ($("#faucet")) $("#faucet").onclick = testParasiAl;
+if ($("#kilitle")) $("#kilitle").onclick = kilitle;
+if ($("#harca")) $("#harca").onclick = harca;
+if ($("#harca-miktar")) $("#harca-miktar").addEventListener("input", harcamaOnizle);
 
-zincirListesiCiz("#zincir-listesi", null);
-zincirListesiCiz("#zincir-listesi-2", null);
+zincirListesiCiz("#zincir-listesi", null, null);
+zincirListesiCiz("#zincir-listesi-2", null, null);
+hedefSeciciCiz();
+
+const _teminat = teminatZinciri();
+if (_teminat && $("#kilit-zincir")) $("#kilit-zincir").textContent = _teminat.ad;
 
 if (!yapilandirmaTamam()) {
   gunluk("Contracts not deployed yet. Testnet deployment is pending.", "hata");

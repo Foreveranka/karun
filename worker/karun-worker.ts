@@ -29,11 +29,21 @@ const ESCROW_ABI = [
   "function processedClaims(bytes32) view returns (bool)",
 ];
 
+const SPENDER_ABI = [
+  "event Paid(bytes32 indexed payoutId, address indexed recipient, uint256 amount)",
+  "function payout(bytes32 payoutId, address recipient, uint256 amount) external",
+  "function processedPayouts(bytes32) view returns (bool)",
+  "function liquidity() view returns (uint256)",
+];
+
+const KANIT_TIPI = "tuple(uint64 chainKey, uint64 blockHeight, bytes encodedTransaction, bytes32 merkleRoot, tuple(bytes32 hash, bool isLeft)[] siblings, bytes32 lowerEndpointDigest, bytes32[] continuityRoots)";
+
 const LEDGER_ABI = [
-  "event DeductionQueued(bytes32 indexed claimId, address indexed user, uint64 indexed chainKey, uint256 amount)",
-  "function submitLockProof(uint64 chainKey, uint64 blockHeight, bytes encodedTransaction, bytes32 merkleRoot, tuple(bytes32 hash, bool isLeft)[] siblings, bytes32 lowerEndpointDigest, bytes32[] continuityRoots) external",
-  "function submitDeductionProof(uint64 chainKey, uint64 blockHeight, bytes encodedTransaction, bytes32 merkleRoot, tuple(bytes32 hash, bool isLeft)[] siblings, bytes32 lowerEndpointDigest, bytes32[] continuityRoots) external",
-  "function claims(bytes32 claimId) view returns (address user, uint64 chainKey, uint256 amount, bool settled)",
+  "event PaymentAuthorized(bytes32 indexed claimId, address indexed user, uint64 indexed hedefZincir, address alici, uint256 tutar, uint256 komisyon, uint64 kaynakZincir)",
+  `function submitLockProof(${KANIT_TIPI} k) external`,
+  `function submitPaymentProof(${KANIT_TIPI} k) external`,
+  `function submitDeductionProof(${KANIT_TIPI} k) external`,
+  "function talepler(bytes32 claimId) view returns (address user, uint64 kaynakZincir, uint64 hedefZincir, address alici, uint256 tutar, uint256 toplam, bool odendi, bool kapandi)",
   "function collateral(address user, uint64 chainKey) view returns (uint256)",
   "function available(address user) view returns (uint256)",
 ];
@@ -114,6 +124,7 @@ async function main() {
   const ccCuzdan = new Wallet(zorunlu("PRIVATE_KEY"), ccProvider);
 
   const escrow = new Contract(zorunlu("ESCROW_ADDRESS"), ESCROW_ABI, sepoliaCuzdan);
+  const spender = new Contract(zorunlu("SPENDER_ADDRESS"), SPENDER_ABI, sepoliaCuzdan);
   const ledger = new Contract(zorunlu("LEDGER_ADDRESS"), LEDGER_ABI, ccCuzdan);
   const escrowAdres = await escrow.getAddress();
   const ledgerAdres = await ledger.getAddress();
@@ -123,6 +134,7 @@ async function main() {
 
   bilgi("Karun worker basladi");
   bilgi(`  Escrow (Sepolia):    ${escrowAdres}`);
+  bilgi(`  Spender (Sepolia):   ${await spender.getAddress()}`);
   bilgi(`  Ledger (Creditcoin): ${ledgerAdres}`);
   bilgi(`  Operator/imzaci:     ${sepoliaCuzdan.address}`);
 
@@ -144,16 +156,16 @@ async function main() {
     return kanit.data;
   }
 
-  function kanitParametreleri(p: proofProvider.ContinuityResponse) {
-    return [
-      p.chainKey,
-      p.headerNumber,
-      p.txBytes,
-      p.merkleProof.root,
-      p.merkleProof.siblings,
-      p.continuityProof.lowerEndpointDigest,
-      p.continuityProof.roots,
-    ] as const;
+  function kanitPaketi(p: proofProvider.ContinuityResponse) {
+    return {
+      chainKey: p.chainKey,
+      blockHeight: p.headerNumber,
+      encodedTransaction: p.txBytes,
+      merkleRoot: p.merkleProof.root,
+      siblings: p.merkleProof.siblings,
+      lowerEndpointDigest: p.continuityProof.lowerEndpointDigest,
+      continuityRoots: p.continuityProof.roots,
+    };
   }
 
   // ── is tanimlari ──
@@ -166,19 +178,47 @@ async function main() {
     }
     await dene("kilit kaniti", async () => {
       const kanit = await kanitUret(txHash);
-      const gonderim = await ledger.submitLockProof(...kanitParametreleri(kanit), { gasLimit: 5_000_000n });
+      const gonderim = await ledger.submitLockProof(kanitPaketi(kanit), { gasLimit: 5_000_000n });
       bilgi(`[KILIT] Kanit gonderildi: ${gonderim.hash}`);
       await gonderim.wait();
       bilgi(`[KILIT] ${user} yeni limiti: ${await ledger.available(user)}`);
     });
   }
 
-  async function kesintiIsle(claimId: string, user: string, amount: bigint) {
-    const talep = await ledger.claims(claimId);
-    if (talep.settled) {
-      bilgi(`[KESINTI] Talep ${claimId.slice(0, 10)}… zaten kapali, atlandi`);
+  async function odemeVeKesintiIsle(claimId: string, user: string, alici: string, tutar: bigint, toplam: bigint) {
+    const talep = await ledger.talepler(claimId);
+    if (talep.kapandi) {
+      bilgi(`[TALEP] ${claimId.slice(0, 10)}… zaten kapali, atlandi`);
       return;
     }
+
+    // 0. hedef zincirde odeme (Spender havuzundan aliciya)
+    if (!talep.odendi) {
+      const islenmisOdeme: boolean = await spender.processedPayouts(claimId);
+      let odemeTxHash: string;
+      if (islenmisOdeme) {
+        const filtre = spender.filters.Paid(claimId);
+        const olaylar = await spender.queryFilter(filtre, -400_000);
+        if (olaylar.length === 0) throw new Error("islenmis odemenin Paid olayi bulunamadi");
+        odemeTxHash = olaylar[olaylar.length - 1].transactionHash;
+      } else {
+        odemeTxHash = await dene("hedef zincir odemesi", async () => {
+          const odeme = await spender.payout(claimId, alici, tutar);
+          bilgi(`[ODEME] Aliciya gonderildi: ${odeme.hash}`);
+          const makbuz = await odeme.wait();
+          if (!makbuz || makbuz.status !== 1) throw new Error("odeme islemi basarisiz");
+          return odeme.hash;
+        });
+      }
+      await dene("odeme kaniti", async () => {
+        const kanit = await kanitUret(odemeTxHash);
+        const gonderim = await ledger.submitPaymentProof(kanitPaketi(kanit), { gasLimit: 5_000_000n });
+        bilgi(`[ODEME] Kanit gonderildi: ${gonderim.hash}`);
+        await gonderim.wait();
+      });
+    }
+
+    const amount = toplam;
 
     // 1. escrow'da kesinti (islenmisse atla)
     const islendi: boolean = await escrow.processedClaims(claimId);
@@ -202,7 +242,7 @@ async function main() {
     // 2. kesinti kanitini ledger'a isle
     await dene("kesinti kaniti", async () => {
       const kanit = await kanitUret(kesintiTxHash);
-      const gonderim = await ledger.submitDeductionProof(...kanitParametreleri(kanit), { gasLimit: 5_000_000n });
+      const gonderim = await ledger.submitDeductionProof(kanitPaketi(kanit), { gasLimit: 5_000_000n });
       bilgi(`[KESINTI] Talep kapatildi: ${gonderim.hash}`);
       await gonderim.wait();
     });
@@ -229,11 +269,11 @@ async function main() {
     if (durum.creditcoinSonBlok === 0) durum.creditcoinSonBlok = guncel - 5_000;
     const bastan = durum.creditcoinSonBlok + 1;
     if (bastan > guncel) return;
-    const olaylar = await ledger.queryFilter(ledger.filters.DeductionQueued(), bastan, guncel);
+    const olaylar = await ledger.queryFilter(ledger.filters.PaymentAuthorized(), bastan, guncel);
     for (const olay of olaylar) {
-      const [claimId, user, , amount] = (olay as any).args;
-      bilgi(`[KESINTI] Olay: talep ${claimId.slice(0, 10)}… ${user} -> ${amount}`);
-      kuyruk.ekle("kesinti " + claimId, () => kesintiIsle(claimId, user, amount));
+      const [claimId, user, hedefZincir, alici, tutar, komisyon] = (olay as any).args;
+      bilgi(`[TALEP] ${claimId.slice(0, 10)}… ${user} -> ${alici} ${tutar} (zincir ${hedefZincir})`);
+      kuyruk.ekle("talep " + claimId, () => odemeVeKesintiIsle(claimId, user, alici, tutar, tutar + komisyon));
     }
     durum.creditcoinSonBlok = guncel;
     durumYaz(durum);

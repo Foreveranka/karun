@@ -26,11 +26,11 @@ abstract contract KarunAscBase {
     function _verifyQuery(
         uint64 chainKey,
         uint64 blockHeight,
-        bytes calldata encodedTransaction,
+        bytes memory encodedTransaction,
         bytes32 merkleRoot,
-        INativeQueryVerifier.MerkleProofEntry[] calldata siblings,
+        INativeQueryVerifier.MerkleProofEntry[] memory siblings,
         bytes32 lowerEndpointDigest,
-        bytes32[] calldata continuityRoots
+        bytes32[] memory continuityRoots
     ) internal returns (bytes32 queryId) {
         INativeQueryVerifier.MerkleProof memory merkleProof =
             INativeQueryVerifier.MerkleProof({root: merkleRoot, siblings: siblings});

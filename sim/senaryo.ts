@@ -1,62 +1,56 @@
 /**
- * Karun UCTAN UCA YEREL SIMULASYON
+ * Karun UCTAN UCA YEREL SIMULASYON (coklu zincir mimarisi)
  *
- * Iki yerel zincir (anvil) uzerinde tam donguyu ve hata yollarini calistirir:
- *   A (8545, "Sepolia")    : mUSDC + KarunEscrow
- *   B (8546, "Creditcoin") : mUSDC + SimVerifier + KarunLedger
+ * Uc yerel zincir:
+ *   A (8545) "Sepolia"    : mUSDC + KarunEscrow (teminat) + KarunSpender (odeme)
+ *   B (8547) "Base"       : mUSDC + KarunSpender (yalnizca odeme; kullanicinin orada HIC parasi yok)
+ *   C (8546) "Creditcoin" : SimVerifier + KarunLedger (HAKEM: token tutmaz, odeme yapmaz)
  *
- * Simulasyon worker'i, GERCEK islem makbuzundaki loglari Attestcoin'in
- * kodlanmis islem bicimine cevirip ledger'a kanit olarak sunar; boylece
- * cozumleme (decode) yolu gercek olay verisiyle test edilir. Gercek agda
- * ayni parametreleri Proof Builder + precompile saglar.
- *
+ * Gercek makbuz loglari Attestcoin kodlamasina cevrilip ledger'a kanit olarak sunulur.
  * Calistirma: sim/calistir.sh
  */
 import { AbiCoder, Contract, ContractFactory, JsonRpcProvider, Wallet, parseUnits } from "ethers";
+import * as fs from "fs";
 
-/** anvil 1.3.x "pending" nonce etiketine 0 donduruyor; "latest" kullan.
- *  Akis tamamen sirali oldugu icin (her tx await .wait()) bu guvenli. */
+const abiCoder = AbiCoder.defaultAbiCoder();
+
+/** anvil "pending" nonce'a 0 donduruyor; "latest" kullan (akis tamamen sirali). */
 class YerelCuzdan extends Wallet {
   override async getNonce(): Promise<number> {
     return this.provider!.getTransactionCount(this.address, "latest");
   }
 }
-import * as fs from "fs";
 
-const abiCoder = AbiCoder.defaultAbiCoder();
-
-// anvil'in 0. standart hesabi (yalnizca yerel simulasyon)
 const OPERATOR_ADRES = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 const ANVIL_PK = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-const KULLANICI_PK = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"; // hesap 1
-const ALICI = "0x000000000000000000000000000000000000BEEF";
+const KULLANICI_PK = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+const ALICI = "0x000000000000000000000000000000000000bEEF";
+const SIFIR = "0x0000000000000000000000000000000000000000";
 
-const A = new JsonRpcProvider("http://127.0.0.1:8545", undefined, { polling: true, pollingInterval: 200, cacheTimeout: -1 });
-const B = new JsonRpcProvider("http://127.0.0.1:8546", undefined, { polling: true, pollingInterval: 200, cacheTimeout: -1 });
+const secenek = { polling: true, pollingInterval: 200, cacheTimeout: -1 };
+const A = new JsonRpcProvider("http://127.0.0.1:8545", undefined, secenek);  // teminat zinciri
+const B = new JsonRpcProvider("http://127.0.0.1:8547", undefined, secenek);  // hedef zincir
+const CC = new JsonRpcProvider("http://127.0.0.1:8546", undefined, secenek); // Creditcoin
 
-const opA = new YerelCuzdan(ANVIL_PK, A); // dagitici + operator (Sepolia)
-const opB = new YerelCuzdan(ANVIL_PK, B); // dagitici + worker (Creditcoin)
+const opA = new YerelCuzdan(ANVIL_PK, A);
+const opB = new YerelCuzdan(ANVIL_PK, B);
+const opCC = new YerelCuzdan(ANVIL_PK, CC);
 const kullaniciA = new YerelCuzdan(KULLANICI_PK, A);
-const kullaniciAAdres = new Wallet(KULLANICI_PK).address;
-const kullaniciB = new YerelCuzdan(KULLANICI_PK, B);
+const kullaniciCC = new YerelCuzdan(KULLANICI_PK, CC);
+const kullaniciAdres = new Wallet(KULLANICI_PK).address;
 
-const SEPOLIA_KEY = 1n;
+const ZINCIR_A = 1n;
+const ZINCIR_B = 2n;
 
 function art(yol: string) {
   const j = JSON.parse(fs.readFileSync(yol, "utf8"));
   return { abi: j.abi, bytecode: j.bytecode.object };
 }
 
-let gecti = 0;
-let kaldi = 0;
+let gecti = 0, kaldi = 0;
 function dogrula(ad: string, kosul: boolean, detay = "") {
-  if (kosul) {
-    gecti++;
-    console.log(`  ✔ ${ad}`);
-  } else {
-    kaldi++;
-    console.log(`  ✘ ${ad} ${detay}`);
-  }
+  if (kosul) { gecti++; console.log(`  ✔ ${ad}`); }
+  else { kaldi++; console.log(`  ✘ ${ad} ${detay}`); }
 }
 async function reverteBekle(ad: string, is_: () => Promise<unknown>, beklenen: string) {
   try {
@@ -64,7 +58,7 @@ async function reverteBekle(ad: string, is_: () => Promise<unknown>, beklenen: s
     dogrula(ad, false, "(revert beklenirdi)");
   } catch (hata: any) {
     const mesaj = String(hata.shortMessage ?? hata.message ?? hata);
-    dogrula(ad, mesaj.includes(beklenen) || String(hata).includes(beklenen), `(gelen: ${mesaj.slice(0, 80)})`);
+    dogrula(ad, mesaj.includes(beklenen) || String(hata).includes(beklenen), `(gelen: ${mesaj.slice(0, 70)})`);
   }
 }
 
@@ -73,7 +67,7 @@ function makbuzdanKodla(status: number, logs: { address: string; topics: readonl
   const logTuple = logs.map((l) => [l.address, [...l.topics], l.data]);
   const chunk0 = abiCoder.encode(
     ["uint64", "uint64", "address", "bool", "address", "uint256", "bytes"],
-    [0, 21000, "0x0000000000000000000000000000000000000000", false, "0x0000000000000000000000000000000000000000", 0, "0x"]
+    [0, 21000, SIFIR, false, SIFIR, 0, "0x"]
   );
   const chunk2 = abiCoder.encode(
     ["uint8", "uint64", "tuple(address,bytes32[],bytes)[]", "bytes"],
@@ -82,179 +76,144 @@ function makbuzdanKodla(status: number, logs: { address: string; topics: readonl
   return abiCoder.encode(["uint8", "bytes[]"], [2, [chunk0, "0x", chunk2]]);
 }
 
-let sorgusayaci = 0;
+let sorgu = 0;
 
 async function main() {
-  console.log("\n═══ KARUN YEREL SIMULASYON ═══\n");
+  console.log("\n═══ KARUN SIMULASYON · coklu zincir ═══\n");
 
-  // ── dagitim ──
   const usdcArt = art("out/MockUSDC.sol/MockUSDC.json");
   const escrowArt = art("out/KarunEscrow.sol/KarunEscrow.json");
+  const spenderArt = art("out/KarunSpender.sol/KarunSpender.json");
   const ledgerArt = art("out/KarunLedger.sol/KarunLedger.json");
   const verifierArt = art("out/SimVerifier.sol/SimVerifier.json");
 
+  // A zinciri: teminat + odeme
   const usdcA = await (await new ContractFactory(usdcArt.abi, usdcArt.bytecode, opA).deploy()).waitForDeployment();
-  const escrow = await (
-    await new ContractFactory(escrowArt.abi, escrowArt.bytecode, opA).deploy(
-      await usdcA.getAddress(), OPERATOR_ADRES, OPERATOR_ADRES, 120 // hazine=operator, 2 dk cekim gecikmesi
-    )
-  ).waitForDeployment();
+  const escrowA = await (await new ContractFactory(escrowArt.abi, escrowArt.bytecode, opA)
+    .deploy(await usdcA.getAddress(), OPERATOR_ADRES, OPERATOR_ADRES, 120)).waitForDeployment();
+  const spenderA = await (await new ContractFactory(spenderArt.abi, spenderArt.bytecode, opA)
+    .deploy(await usdcA.getAddress(), OPERATOR_ADRES)).waitForDeployment();
 
+  // B zinciri: yalnizca odeme
   const usdcB = await (await new ContractFactory(usdcArt.abi, usdcArt.bytecode, opB).deploy()).waitForDeployment();
-  const verifier = await (await new ContractFactory(verifierArt.abi, verifierArt.bytecode, opB).deploy()).waitForDeployment();
-  const ledger = await (
-    await new ContractFactory(ledgerArt.abi, ledgerArt.bytecode, opB).deploy(
-      await usdcB.getAddress(), 30, await verifier.getAddress()
-    )
-  ).waitForDeployment();
+  const spenderB = await (await new ContractFactory(spenderArt.abi, spenderArt.bytecode, opB)
+    .deploy(await usdcB.getAddress(), OPERATOR_ADRES)).waitForDeployment();
 
-  const escrowAdres = await escrow.getAddress();
-  await (await (ledger as any).registerEscrow(SEPOLIA_KEY, escrowAdres, 8000)).wait();
+  // Creditcoin: hakem
+  const verifier = await (await new ContractFactory(verifierArt.abi, verifierArt.bytecode, opCC).deploy()).waitForDeployment();
+  const ledger = await (await new ContractFactory(ledgerArt.abi, ledgerArt.bytecode, opCC)
+    .deploy(30, await verifier.getAddress())).waitForDeployment();
 
-  // havuz: 50.000
-  await (await (usdcB as any).mint(OPERATOR_ADRES, parseUnits("50000", 6))).wait();
-  await (await (usdcB as any).approve(await ledger.getAddress(), parseUnits("50000", 6))).wait();
-  await (await (ledger as any).fundPool(parseUnits("50000", 6))).wait();
+  await (await (ledger as any).zincirTanimla(ZINCIR_A, await escrowA.getAddress(), await spenderA.getAddress(), 8000, true, true)).wait();
+  await (await (ledger as any).zincirTanimla(ZINCIR_B, SIFIR, await spenderB.getAddress(), 8000, false, true)).wait();
 
-  // kullaniciya kaynak zincirde para
-  await (await (usdcA as any).mint(kullaniciAAdres, parseUnits("10000", 6))).wait();
+  for (const [usdc, spender] of [[usdcA, spenderA], [usdcB, spenderB]] as const) {
+    await (await (usdc as any).mint(OPERATOR_ADRES, parseUnits("50000", 6))).wait();
+    await (await (usdc as any).approve(await spender.getAddress(), parseUnits("50000", 6))).wait();
+    await (await (spender as any).fund(parseUnits("50000", 6))).wait();
+  }
+  await (await (usdcA as any).mint(kullaniciAdres, parseUnits("10000", 6))).wait();
 
   console.log("Dagitim tamam.");
-  console.log(`  Escrow: ${escrowAdres}`);
-  console.log(`  Ledger: ${await ledger.getAddress()}\n`);
+  console.log(`  A zinciri  escrow ${await escrowA.getAddress()}  spender ${await spenderA.getAddress()}`);
+  console.log(`  B zinciri  spender ${await spenderB.getAddress()}`);
+  console.log(`  Creditcoin ledger (hakem) ${await ledger.getAddress()}\n`);
 
-  const escrowK = escrow.connect(kullaniciA) as Contract;
+  const escrowK = escrowA.connect(kullaniciA) as Contract;
   const usdcAK = usdcA.connect(kullaniciA) as Contract;
-  const ledgerK = ledger.connect(kullaniciB) as Contract;
+  const ledgerK = ledger.connect(kullaniciCC) as Contract;
 
-  // ── sim worker yardimcilari ──
-  async function kanitla(txHash: string, fn: "submitLockProof" | "submitDeductionProof") {
-    const makbuz = await A.getTransactionReceipt(txHash);
+  function kanitPaketi(chainKey: bigint, blok: number, kodlu: string) {
+    return {
+      chainKey, blockHeight: blok, encodedTransaction: kodlu,
+      merkleRoot: "0x" + "00".repeat(32), siblings: [],
+      lowerEndpointDigest: "0x" + "00".repeat(32), continuityRoots: [],
+    };
+  }
+  async function kanitla(saglayici: JsonRpcProvider, chainKey: bigint, txHash: string, fn: string) {
+    const makbuz = await saglayici.getTransactionReceipt(txHash);
     if (!makbuz) throw new Error("makbuz yok");
     const kodlu = makbuzdanKodla(makbuz.status ?? 0, makbuz.logs as any);
-    await (await (verifier as any).ayarla(true, ++sorgusayaci)).wait();
-    const gonderim = await (ledger as any)[fn](SEPOLIA_KEY, makbuz.blockNumber, kodlu, "0x" + "00".repeat(32), [], "0x" + "00".repeat(32), []);
-    await gonderim.wait();
+    await (await (verifier as any).ayarla(true, ++sorgu)).wait();
+    await (await (ledger as any)[fn](kanitPaketi(chainKey, makbuz.blockNumber, kodlu))).wait();
   }
 
-  // ═══ SENARYO 1: kilit → kanit → limit ═══
-  console.log("Senaryo 1: kilit ve limit acilisi");
-  await (await usdcAK.approve(escrowAdres, parseUnits("10000", 6))).wait();
+  // 1) kilit → limit
+  console.log("1) Teminat kilidi (A zinciri) ve limit acilisi");
+  await (await usdcAK.approve(await escrowA.getAddress(), parseUnits("10000", 6))).wait();
   const kilitTx = await escrowK.lock(parseUnits("5000", 6));
   await kilitTx.wait();
-  await kanitla(kilitTx.hash, "submitLockProof");
+  await kanitla(A, ZINCIR_A, kilitTx.hash, "submitLockProof");
+  dogrula("teminat 5000 senkron", (await (ledger as any).collateral(kullaniciAdres, ZINCIR_A)) === parseUnits("5000", 6));
+  dogrula("limit %80 = 4000", (await (ledger as any).available(kullaniciAdres)) === parseUnits("4000", 6));
 
-  dogrula("teminat senkronu 5000", (await (ledger as any).collateral(kullaniciAAdres, SEPOLIA_KEY)) === parseUnits("5000", 6));
-  dogrula("limit %80 = 4000", (await (ledger as any).available(kullaniciAAdres)) === parseUnits("4000", 6));
+  // 2) B zincirinde odeme talebi
+  console.log("2) B zincirinde odeme talebi (kullanicinin orada parasi YOK)");
+  dogrula("kullanicinin B zincirinde parasi yok", (await (usdcB as any).balanceOf(kullaniciAdres)) === 0n);
+  const talepTx = await ledgerK.requestPayment(ALICI, parseUnits("1000", 6), ZINCIR_B, ZINCIR_A);
+  const talepMakbuz = await talepTx.wait();
+  const yetki = await (ledger as any).queryFilter(
+    (ledger as any).filters.PaymentAuthorized(), talepMakbuz!.blockNumber, talepMakbuz!.blockNumber);
+  dogrula("odeme talimati cikti", yetki.length === 1);
+  const claimId = yetki[0].args[0];
+  dogrula("borc 1003 (komisyon %0,30)", (await (ledger as any).outstanding(kullaniciAdres)) === parseUnits("1003", 6));
 
-  // ═══ SENARYO 2: ayni kaniti tekrar isleme (worker mukerrer korumasi) ═══
-  console.log("Senaryo 2: tekrar oynatma korumasi");
-  {
-    const makbuz = await A.getTransactionReceipt(kilitTx.hash);
-    const kodlu = makbuzdanKodla(1, makbuz!.logs as any);
-    // ayni txIndex → ayni queryId → revert beklenir
-    await reverteBekle(
-      "ayni sorgu reddedilir",
-      async () => {
-        const gonderim = await (ledger as any).submitLockProof(SEPOLIA_KEY, makbuz!.blockNumber, kodlu, "0x" + "00".repeat(32), [], "0x" + "00".repeat(32), []);
-        await gonderim.wait();
-      },
-      "sorgu islendi"
-    );
-  }
+  // 3) B zincirindeki havuz oder
+  console.log("3) B zincirindeki havuz aliciya oder");
+  const odemeTx = await (spenderB as any).payout(claimId, ALICI, parseUnits("1000", 6));
+  await odemeTx.wait();
+  dogrula("alici B zincirinde 1000 aldi", (await (usdcB as any).balanceOf(ALICI)) === parseUnits("1000", 6));
 
-  // ═══ SENARYO 3: harcama + otomatik kesinti + mahsup ═══
-  console.log("Senaryo 3: harca, kes, mahsupla");
-  const harcamaTx = await ledgerK.spend(ALICI, parseUnits("1000", 6), SEPOLIA_KEY);
-  const harcamaMakbuz = await harcamaTx.wait();
+  // 4) odeme kaniti
+  console.log("4) Odeme Attestcoin ile kanitlanir");
+  await kanitla(B, ZINCIR_B, odemeTx.hash, "submitPaymentProof");
+  dogrula("odeme kanitlandi", (await (ledger as any).talepler(claimId)).odendi === true);
 
-  dogrula("alici parayi ANINDA aldi (1000)", (await (usdcB as any).balanceOf(ALICI)) === parseUnits("1000", 6));
-  dogrula("borc = 1003 (komisyon %0,30)", (await (ledger as any).outstanding(kullaniciAAdres)) === parseUnits("1003", 6));
-
-  // DeductionQueued olayindan claimId al
-  const kuyrukOlaylari = await (ledger as any).queryFilter((ledger as any).filters.DeductionQueued(), harcamaMakbuz!.blockNumber, harcamaMakbuz!.blockNumber);
-  dogrula("kesinti talebi olustu", kuyrukOlaylari.length === 1);
-  const claimId = kuyrukOlaylari[0].args[0];
-
-  // operator escrow'da keser (gercekte worker yapar)
-  const kesintiTx = await (escrow as any).deduct(kullaniciAAdres, parseUnits("1003", 6), claimId);
+  // 5) kesinti + kanit
+  console.log("5) A zincirindeki escrow'dan otomatik kesinti ve kaniti");
+  const kesintiTx = await (escrowA as any).deduct(kullaniciAdres, parseUnits("1003", 6), claimId);
   await kesintiTx.wait();
-  dogrula("escrow kilidi dustu (3997)", (await (escrow as any).locked(kullaniciAAdres)) === parseUnits("3997", 6));
-  dogrula("hazine kesintiyi aldi (1003)", (await (usdcA as any).balanceOf(OPERATOR_ADRES)) === parseUnits("1003", 6));
+  dogrula("A zincirinde kilit 3997'ye dustu", (await (escrowA as any).locked(kullaniciAdres)) === parseUnits("3997", 6));
+  await kanitla(A, ZINCIR_A, kesintiTx.hash, "submitDeductionProof");
+  dogrula("borc sifirlandi", (await (ledger as any).outstanding(kullaniciAdres)) === 0n);
+  dogrula("talep kapandi", (await (ledger as any).talepler(claimId)).kapandi === true);
+  dogrula("yeni limit kalan teminatin %80'i",
+    (await (ledger as any).available(kullaniciAdres)) === (parseUnits("3997", 6) * 8000n) / 10000n);
 
-  // kesinti kaniti ledger'da talebi kapatir
-  await kanitla(kesintiTx.hash, "submitDeductionProof");
-  dogrula("borc sifirlandi", (await (ledger as any).outstanding(kullaniciAAdres)) === 0n);
-  dogrula("teminat kesinti sonrasi 3997", (await (ledger as any).collateral(kullaniciAAdres, SEPOLIA_KEY)) === parseUnits("3997", 6));
-  const talep = await (ledger as any).claims(claimId);
-  dogrula("talep kapali", talep.settled === true);
+  // 6) ayni zincirde odeme
+  console.log("6) Ayni zincirde odeme (A'da kilitle, A'da ode)");
+  const t3 = await ledgerK.requestPayment(ALICI, parseUnits("500", 6), ZINCIR_A, ZINCIR_A);
+  const m3 = await t3.wait();
+  const o3 = await (ledger as any).queryFilter((ledger as any).filters.PaymentAuthorized(), m3!.blockNumber, m3!.blockNumber);
+  const claim3 = o3[0].args[0];
+  const odeme3 = await (spenderA as any).payout(claim3, ALICI, parseUnits("500", 6));
+  await odeme3.wait();
+  dogrula("alici A zincirinde 500 aldi", (await (usdcA as any).balanceOf(ALICI)) === parseUnits("500", 6));
+  await kanitla(A, ZINCIR_A, odeme3.hash, "submitPaymentProof");
+  dogrula("ayni zincir odemesi kanitlandi", (await (ledger as any).talepler(claim3)).odendi === true);
 
-  // ═══ SENARYO 4: hata yollari ═══
-  console.log("Senaryo 4: hata yollari");
-  await reverteBekle(
-    "limit asilamaz",
-    () => ledgerK.spend(ALICI, parseUnits("9999", 6), SEPOLIA_KEY),
-    "limit yetersiz"
-  );
-  await reverteBekle(
-    "teminatsiz kullanici harcayamaz",
-    async () => {
-      const yabanci = new YerelCuzdan("0x" + "07".repeat(32), B);
-      await (await opB.sendTransaction({ to: yabanci.address, value: parseUnits("1", 18) })).wait();
-      await (ledger.connect(yabanci) as any).spend(ALICI, parseUnits("1", 6), SEPOLIA_KEY);
-    },
-    "limit yetersiz"
-  );
-  await reverteBekle(
-    "operator disinda kimse kesemez",
-    () => (escrow.connect(kullaniciA) as any).deduct(kullaniciAAdres, 1n, "0x" + "11".repeat(32)),
-    "operator degil"
-  );
-  await reverteBekle(
-    "gecersiz kanit reddedilir",
-    async () => {
-      await (await (verifier as any).ayarla(false, ++sorgusayaci)).wait();
-      const makbuz = await A.getTransactionReceipt(kilitTx.hash);
-      const kodlu = makbuzdanKodla(1, makbuz!.logs as any);
-      const gonderim = await (ledger as any).submitLockProof(SEPOLIA_KEY, 999, kodlu, "0x" + "00".repeat(32), [], "0x" + "00".repeat(32), []);
-      await gonderim.wait();
-    },
-    "kanit gecersiz"
-  );
+  // 7) hata yollari
+  console.log("7) Hata yollari");
+  await reverteBekle("limit asilamaz", () => ledgerK.requestPayment(ALICI, parseUnits("9999", 6), ZINCIR_B, ZINCIR_A), "limit yetersiz");
+  await reverteBekle("tanimsiz zincire odeme yok", () => ledgerK.requestPayment(ALICI, parseUnits("10", 6), 99n, ZINCIR_A), "odeme zinciri kapali");
+  await reverteBekle("teminatsiz zincirden kesinti yok", () => ledgerK.requestPayment(ALICI, parseUnits("10", 6), ZINCIR_B, ZINCIR_B), "teminat zinciri kapali");
+  await reverteBekle("operator disinda odeme yapilamaz",
+    () => (spenderB.connect(new YerelCuzdan(KULLANICI_PK, B)) as any).payout("0x" + "22".repeat(32), ALICI, 1n), "operator degil");
+  await reverteBekle("ayni odeme iki kez yapilamaz",
+    () => (spenderB as any).payout(claimId, ALICI, parseUnits("1000", 6)), "odeme islendi");
 
-  // ═══ SENARYO 5: cekim gecikmesi ve kesinti onceligi ═══
-  console.log("Senaryo 5: cekim gecikmesi");
+  // 8) cekim gecikmesi
+  console.log("8) Cekim gecikmesi");
   await (await escrowK.requestUnlock(parseUnits("1000", 6))).wait();
   await reverteBekle("gecikme dolmadan cekilemez", () => escrowK.withdraw(), "bekleme suresi");
   await A.send("evm_increaseTime", [130]);
   await A.send("evm_mine", []);
   await (await escrowK.withdraw()).wait();
-  dogrula("gecikme sonrasi cekim basarili (kalan 2997)", (await (escrow as any).locked(kullaniciAAdres)) === parseUnits("2997", 6));
+  dogrula("gecikme sonrasi cekim basarili", (await (escrowA as any).locked(kullaniciAdres)) === parseUnits("2997", 6));
 
-  // ═══ SENARYO 6: ikinci harcama dongusu (sistem kirli durumda da calisiyor) ═══
-  console.log("Senaryo 6: ikinci tam dongu");
-  {
-    // yeni kilit senkronu (kumulatif: 2997 uzerine +2000 kilit)
-    const kilit2 = await escrowK.lock(parseUnits("2000", 6));
-    await kilit2.wait();
-    await kanitla(kilit2.hash, "submitLockProof");
-    dogrula("teminat 4997", (await (ledger as any).collateral(kullaniciAAdres, SEPOLIA_KEY)) === parseUnits("4997", 6));
-
-    const h2 = await ledgerK.spend(ALICI, parseUnits("500", 6), SEPOLIA_KEY);
-    const m2 = await h2.wait();
-    const olay2 = await (ledger as any).queryFilter((ledger as any).filters.DeductionQueued(), m2!.blockNumber, m2!.blockNumber);
-    const claim2 = olay2[0].args[0];
-    const k2 = await (escrow as any).deduct(kullaniciAAdres, parseUnits("501.5", 6), claim2);
-    await k2.wait();
-    await kanitla(k2.hash, "submitDeductionProof");
-    dogrula("ikinci dongu: borc sifir", (await (ledger as any).outstanding(kullaniciAAdres)) === 0n);
-    dogrula("alici toplam 1500 aldi", (await (usdcB as any).balanceOf(ALICI)) === parseUnits("1500", 6));
-  }
-
-  // ═══ sonuc ═══
   console.log(`\n═══ SONUC: ${gecti} dogrulama gecti, ${kaldi} kaldi ═══`);
   if (kaldi > 0) process.exit(1);
-  console.log("Simulasyon TEMIZ: tam dongu + hata yollari calisiyor.\n");
+  console.log("Simulasyon TEMIZ: coklu zincir odeme dongusu calisiyor.\n");
   process.exit(0);
 }
 

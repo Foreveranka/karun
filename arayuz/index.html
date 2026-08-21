@@ -130,6 +130,19 @@ button.ikincil-dugme{width:100%;margin-top:8px;padding:12px;border:none;border-r
   background:none;color:var(--vurgu);font-size:13.5px;font-weight:500;font-family:inherit;cursor:pointer}
 button.ikincil-dugme:hover{background:var(--vurgu-acik)}
 
+/* hedef zincir secici */
+.hedefler{display:flex;flex-wrap:wrap;gap:8px;margin-top:2px}
+.hedef{
+  display:inline-flex;align-items:center;gap:7px;padding:9px 13px;border-radius:10px;
+  border:1.5px solid var(--cizgi);background:var(--yuzey);font-family:inherit;font-size:13.5px;
+  font-weight:500;color:var(--murekkep);cursor:pointer;transition:border-color .15s,background .15s;
+}
+.hedef:hover{border-color:var(--vurgu)}
+.hedef.secili{border-color:var(--vurgu);background:var(--vurgu-acik);color:var(--vurgu);font-weight:600}
+.hedef.kapali{opacity:.42;cursor:not-allowed;border-style:dashed}
+.hedef .h-simge{font-size:13px;opacity:.7}
+.hedef .h-yakinda{font-size:10.5px;color:var(--ucuncul);margin-left:2px}
+
 /* settlement zaman cizelgesi */
 .adim{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--ucuncul);padding:7px 0}
 .adim::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--cizgi);flex:none;transition:background .2s}
@@ -185,7 +198,7 @@ button.ikincil-dugme:hover{background:var(--vurgu-acik)}
         <div class="kahraman">
           <div class="etiket">Spendable balance</div>
           <div class="deger" id="o-limit">$0.00</div>
-          <div class="aciklama">Backed by your locked funds on every chain · verified by Attestcoin, no bridging</div>
+          <div class="aciklama">Locked funds stay where they are. Karun pays your recipient on the chain you pick, then settles from your collateral — no wrapped tokens, no bridging.</div>
         </div>
         <div class="kahraman-yan">
           <div class="yan-metrik">Locked collateral <b id="o-kilit">—</b></div>
@@ -207,7 +220,9 @@ button.ikincil-dugme:hover{background:var(--vurgu-acik)}
         </div>
         <div>
           <div class="kart">
-            <h2>Quick send</h2>
+            <h2>Send</h2>
+            <label>Pay on</label>
+            <div id="hedef-secici" class="hedefler"></div>
             <label for="harca-alici">To</label>
             <input id="harca-alici" placeholder="0x…" spellcheck="false" autocomplete="off">
             <label for="harca-miktar">Amount (mUSDC)</label>
@@ -219,8 +234,8 @@ button.ikincil-dugme:hover{background:var(--vurgu-acik)}
             <h2>Live settlement</h2>
             <div class="adim" id="a1">Funds locked on source chain</div>
             <div class="adim" id="a2">Lock proven — balance opened</div>
-            <div class="adim" id="a3">Payment sent instantly</div>
-            <div class="adim" id="a4">Escrow auto-deduction</div>
+            <div class="adim" id="a3">Recipient paid on target chain</div>
+            <div class="adim" id="a4">Payout proven · escrow deduction</div>
             <div class="adim" id="a5">Deduction proven — settled</div>
             <div id="gunluk"></div>
           </div>
@@ -236,7 +251,7 @@ button.ikincil-dugme:hover{background:var(--vurgu-acik)}
           <div id="zincir-listesi-2"></div>
         </div>
         <div class="kart">
-          <h2>Add funds · Sepolia</h2>
+          <h2>Add funds · <span id="kilit-zincir">Sepolia</span></h2>
           <p style="font-size:13px;color:var(--ikincil);line-height:1.55;margin-bottom:4px">
             Lock mUSDC into your escrow. Once proven on Creditcoin, 80% becomes spendable anywhere.
           </p>
