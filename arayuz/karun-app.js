@@ -131,9 +131,12 @@ async function tazele() {
     $("#o-attested").textContent = "$" + birim(attested);
     $("#o-limit").textContent = "$" + birim(limit);
     $("#o-borc").textContent = "$" + birim(borc);
-    $("#b-cuzdan").textContent = birim(cuzdanBakiye);
-    $("#b-havuz").textContent = birim(havuz);
+    $("#b-cuzdan").textContent = "$" + birim(cuzdanBakiye);
+    $("#b-havuz").textContent = "$" + birim(havuz);
+    zincirListesiCiz("#zincir-listesi", { 1: attested });
+    zincirListesiCiz("#zincir-listesi-2", { 1: attested });
     harcamaOnizle();
+    gecmisYukle();
   } catch (hata) {
     gunluk("Refresh error: " + hataCevir(hata), "hata");
   }
@@ -148,6 +151,117 @@ function harcamaOnizle() {
     const fee = (miktar * feeBpsDeger) / 10000n;
     el.textContent = `Recipient gets ${birim(miktar)} now · ${birim(miktar + fee)} will be auto-deducted from your escrow (fee ${birim(fee)})`;
   } catch { el.textContent = ""; }
+}
+
+
+/* ── Zincir vizyonu: bugun canli olan + yol haritasindakiler ── */
+const ZINCIRLER = [
+  { ad: "Sepolia", kisa: "SEP", simge: "Ξ", key: 1, canli: true, not: "Ethereum testnet" },
+  { ad: "Ethereum", kisa: "ETH", simge: "Ξ", key: 3, canli: false, not: "attested by Attestcoin" },
+  { ad: "Base", kisa: "BASE", simge: "B", key: null, canli: false, not: "roadmap" },
+  { ad: "Arbitrum", kisa: "ARB", simge: "A", key: null, canli: false, not: "roadmap" },
+  { ad: "Polygon", kisa: "POL", simge: "P", key: null, canli: false, not: "roadmap" },
+];
+
+function zincirListesiCiz(kapId, teminatlar) {
+  const kap = $(kapId);
+  if (!kap) return;
+  kap.innerHTML = ZINCIRLER.map((z) => {
+    const tutar = z.canli && teminatlar ? "$" + birim(teminatlar[z.key] || 0n) : "—";
+    const durum = z.canli
+      ? '<div class="z-durum canli">Live · proven on Creditcoin</div>'
+      : `<div class="z-durum yakinda">${z.not}</div>`;
+    return `<div class="zincir-satir${z.canli ? "" : " soluk"}">
+      <div class="z-logo">${z.simge}</div>
+      <div>
+        <div class="z-ad">${z.ad}</div>
+        <div class="z-detay">${z.canli ? z.not : "Coming soon"}</div>
+      </div>
+      <div class="z-sag"><div class="z-tutar">${tutar}</div>${durum}</div>
+    </div>`;
+  }).join("");
+}
+
+function zamanKisa(saniye) {
+  if (!saniye) return "—";
+  const fark = Math.floor(Date.now() / 1000) - Number(saniye);
+  if (fark < 60) return "just now";
+  if (fark < 3600) return Math.floor(fark / 60) + "m ago";
+  if (fark < 86400) return Math.floor(fark / 3600) + "h ago";
+  return Math.floor(fark / 86400) + "d ago";
+}
+
+/* Odeme ve aktivite gecmisini zincirden oku. */
+async function gecmisYukle() {
+  if (!hesap || !yapilandirmaTamam()) return;
+  try {
+    const ledger = new ethers.Contract(C.creditcoin.ledger, LEDGER_ABI, ccOkuyucu);
+    const guncel = await ccOkuyucu.getBlockNumber();
+    const bastan = Math.max(0, guncel - 45_000);
+
+    const [harcamalar, kapananlar, senkronlar] = await Promise.all([
+      ledger.queryFilter(ledger.filters.SpendExecuted(hesap), bastan, guncel),
+      ledger.queryFilter(ledger.filters.ClaimSettled(null, hesap), bastan, guncel),
+      ledger.queryFilter(ledger.filters.CollateralSynced(hesap), bastan, guncel),
+    ]);
+
+    const kapaliTalepler = new Set(kapananlar.map((o) => o.args[0]));
+    const bloklar = new Map();
+    async function blokZamani(no) {
+      if (!bloklar.has(no)) bloklar.set(no, (await ccOkuyucu.getBlock(no))?.timestamp ?? 0);
+      return bloklar.get(no);
+    }
+
+    /* ── odemeler tablosu ── */
+    const satirlar = [];
+    for (const o of [...harcamalar].reverse()) {
+      const [, alici, tutar, komisyon, claimId] = o.args;
+      const kapali = kapaliTalepler.has(claimId);
+      satirlar.push(`<tr>
+        <td><div>${zamanKisa(await blokZamani(o.blockNumber))}</div><div class="kucuk">${kapali ? "settled" : "settling"}</div></td>
+        <td class="mono">${alici.slice(0, 10)}…${alici.slice(-4)}</td>
+        <td><b>$${birim(tutar)}</b><div class="kucuk">fee $${birim(komisyon)}</div></td>
+        <td><span class="rozet ${kapali ? "tamam" : "bekliyor"}">${kapali ? "Settled" : "In flight"}</span></td>
+        <td><a href="${C.creditcoin.explorer}/tx/${o.transactionHash}" target="_blank" rel="noopener">View ↗</a></td>
+      </tr>`);
+    }
+    const odemeTablosu = satirlar.length
+      ? `<table><thead><tr><th>When</th><th>To</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>${satirlar.join("")}</tbody></table>`
+      : '<div class="tablo-bos">No payments yet — send one from Overview</div>';
+    if ($("#tablo-odemeler")) $("#tablo-odemeler").innerHTML = odemeTablosu;
+    if ($("#son-odemeler")) {
+      $("#son-odemeler").innerHTML = satirlar.length
+        ? `<table><thead><tr><th>When</th><th>To</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>${satirlar.slice(0, 4).join("")}</tbody></table>`
+        : '<div class="tablo-bos">No payments yet</div>';
+    }
+
+    /* ── aktivite: tum kanitlanmis olaylar ── */
+    const olaylar = [];
+    for (const o of senkronlar) olaylar.push({ blok: o.blockNumber, tur: "Collateral proven",
+      detay: "$" + birim(o.args[2]) + " total locked, verified via Attestcoin", hash: o.transactionHash });
+    for (const o of harcamalar) olaylar.push({ blok: o.blockNumber, tur: "Payment sent",
+      detay: "$" + birim(o.args[2]) + " to " + o.args[1].slice(0, 10) + "…", hash: o.transactionHash });
+    for (const o of kapananlar) olaylar.push({ blok: o.blockNumber, tur: "Deduction proven",
+      detay: "$" + birim(o.args[2]) + " deducted from escrow, claim settled", hash: o.transactionHash });
+    olaylar.sort((a, b) => b.blok - a.blok);
+
+    const aktiviteSatirlari = [];
+    for (const e of olaylar) {
+      aktiviteSatirlari.push(`<tr>
+        <td>${zamanKisa(await blokZamani(e.blok))}</td>
+        <td><b>${e.tur}</b></td>
+        <td class="kucuk">${e.detay}</td>
+        <td><a href="${C.creditcoin.explorer}/tx/${e.hash}" target="_blank" rel="noopener">View ↗</a></td>
+      </tr>`);
+    }
+    if ($("#tablo-aktivite")) {
+      $("#tablo-aktivite").innerHTML = aktiviteSatirlari.length
+        ? `<table><thead><tr><th>When</th><th>Event</th><th>Detail</th><th></th></tr></thead><tbody>${aktiviteSatirlari.join("")}</tbody></table>`
+        : '<div class="tablo-bos">No activity yet</div>';
+    }
+  } catch (hata) {
+    /* gecmis okunamazsa sessiz gec: ana akis etkilenmesin */
+  }
 }
 
 async function baglan() {
@@ -314,8 +428,11 @@ $("#kilitle").onclick = kilitle;
 $("#harca").onclick = harca;
 $("#harca-miktar").addEventListener("input", harcamaOnizle);
 
+zincirListesiCiz("#zincir-listesi", null);
+zincirListesiCiz("#zincir-listesi-2", null);
+
 if (!yapilandirmaTamam()) {
-  gunluk("Contracts not configured yet (karun-config.js). Deploy first, then refresh.", "hata");
+  gunluk("Contracts not deployed yet. Testnet deployment is pending.", "hata");
 } else {
   gunluk("Ready. Connect a wallet to begin.");
 }
