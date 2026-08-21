@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Karun">
+  <defs>
+    <linearGradient id="k-altin" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e0b25c"/>
+      <stop offset="45%" stop-color="#b07a1e"/>
+      <stop offset="100%" stop-color="#8a5a0f"/>
+    </linearGradient>
+  </defs>
+  <!-- basilmis sikke govdesi -->
+  <circle cx="32" cy="32" r="30" fill="url(#k-altin)"/>
+  <circle cx="32" cy="32" r="30" fill="none" stroke="#6f470a" stroke-opacity=".35" stroke-width="2"/>
+  <circle cx="32" cy="32" r="24.5" fill="none" stroke="#5d3c08" stroke-opacity=".28" stroke-width="1.5"/>
+  <!-- Lidya sikkelerindeki kabartma hissi icin ust isik -->
+  <path d="M32 2a30 30 0 0 1 21.2 51.2A30 30 0 0 0 10.8 10.8 29.9 29.9 0 0 1 32 2z" fill="#fff" fill-opacity=".16"/>
+  <!-- K harfi, kabartma -->
+  <g fill="#4a2f06" fill-opacity=".92">
+    <rect x="20" y="18" width="6" height="28" rx="1.4"/>
+    <path d="M44.6 18h-7.4L27.4 30.2v3.6L37.2 46h7.6L33.9 32z"/>
+  </g>
+  <g fill="#ffe6ac" fill-opacity=".5">
+    <rect x="20" y="18" width="6" height="2" rx="1"/>
+    <path d="M44.6 18h-7.4l-2.1 2h7.4z"/>
+  </g>
+</svg>
