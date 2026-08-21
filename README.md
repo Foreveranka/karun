@@ -2,108 +2,124 @@
 
 **BUIDL CTC 2026 Fall submission — powered by the Attestcoin Protocol on Creditcoin.**
 
-> Named after King Croesus ("Karun" in Turkish), the Anatolian king who minted the world's first coins.
+> Named after King Croesus ("Karun" in Turkish), the Anatolian king who minted the world's first coins. His wealth was proverbial because it was recognised everywhere.
 
-**[Live demo](https://karun-eta.vercel.app)** · **[Documentation](docs/)** · **[Testnet deployment and recorded run](TESTNET.md)**
+**[Live demo](https://karun-eta.vercel.app)** · **[Documentation](docs/)** · **[Testnet run](TESTNET.md)**
 
-Live on testnet: a single payment cycle verified three separate Attestcoin proofs on chain. Locked 5,000 mUSDC on Sepolia, paid a recipient 1,000 on Sepolia from the Karun pool, and settled it from the escrow. Outstanding debt after the cycle: zero.
+Verified end to end on testnet: one payment cycle, three separate Attestcoin proofs checked on chain. Locked 5,000 mUSDC, opened a 4,000 balance, paid a recipient 1,000 from the Karun pool, deducted 1,003 from the escrow, closed the claim. Outstanding debt afterwards: zero.
 
-## The Problem
+## The problem
 
-Your money is scattered across chains. Spending on a chain where you hold nothing means bridging: slow, costly, and risky. Every bridge hop is friction and attack surface.
+Capital is scattered. A user holds stablecoins on one chain and needs to pay on another. Today the only answer is bridging: lock or burn on one side, wait, mint a wrapped asset on the other, trust whatever sits in the middle. The user never wanted to move their money. They wanted to make a payment.
 
-## The Idea
+## The idea
 
-Karun turns funds on *any* chain into **one spendable balance**, with **no bridging**:
+Karun separates **where value sits** from **where value is spent**.
 
-1. **Lock** stablecoins into a `KarunEscrow` on each source chain (e.g. Sepolia).
-2. The lock is **cryptographically proven on Creditcoin** via Attestcoin Protocol readability (Block Prover Precompile `0x0FD2`). `KarunLedger` opens a unified credit line worth **80% LTV** of your attested collateral.
-3. **Spend anywhere Karun has liquidity**: the recipient is paid *instantly* from the protocol's local pool.
-4. The exact amount (+ a 0.30% fee) is **auto-deducted from your escrow** on the source chain. The deduction itself is then **proven back on Creditcoin** via Attestcoin readability, settling the claim.
+1. **Lock** stablecoins into a `KarunEscrow` on a chain where you already hold them. No wrapped token is minted for you.
+2. The lock is **proven on Creditcoin** through Attestcoin readability, verified by the Block Prover Precompile at `0x0FD2`. `KarunLedger` opens a single spendable balance worth **80% of the attested collateral**.
+3. **Pay on the chain you choose.** The recipient is paid from the `KarunSpender` pool on that chain, in real tokens. They sign nothing and need no gas anywhere else.
+4. The amount plus a **0.30% fee is deducted from your escrow**, and that deduction is **proven back on Creditcoin**, settling the claim.
 
-No debt accrues. Every spend settles against your own funds, wherever they sit. The 80% buffer covers in-flight latency and volatility.
+No debt accrues. Every payment settles against your own funds, wherever they sit. The 80% buffer covers the settlement window.
 
-## Why Attestcoin Is the Core
+## Creditcoin is the arbiter, not a payment rail
 
-Attestcoin readability is used **twice per spend cycle**, and the system cannot function without it:
+This is the design decision the whole project rests on. Creditcoin holds **no user funds and makes no payouts**. It verifies proofs, keeps the single balance, prevents double spends and settles claims. Money always moves on the chain the user picked.
 
-- **Lock proof** — the credit line only opens after `verifyAndEmit()` on the Block Prover Precompile confirms the `Locked` event happened on the source chain. No trusted oracle.
-- **Deduction proof** — the ledger only releases a claim after the `Deducted` event is verified the same way. The protocol cannot lie about having settled.
+The alternative, paying from Creditcoin, would force every user to end up with a balance there. That is bridging with extra words.
+
+## Why Attestcoin is load bearing
+
+Every completed payment produces **three** on chain verifications on Creditcoin:
+
+| Proof | Source event | What it establishes | Without it |
+|---|---|---|---|
+| Lock | `Locked` | The collateral really exists | The worker could invent balances |
+| Payout | `Paid` | The recipient really got paid | The protocol could deduct without paying |
+| Deduction | `Deducted` | The escrow really took the money | Claims would close on a courier's word |
+
+Remove the protocol and there is no honest way to run any of these steps.
+
+The precompile proves inclusion only, so the contract does the rest itself: it requires `receiptStatus == 1`, accepts events only from the registered contract for that chain, and stores a query id per proof so nothing can be replayed.
 
 ## Architecture
 
 ```mermaid
 sequenceDiagram
     participant U as User
-    participant E as KarunEscrow (Sepolia)
-    participant W as Worker (offchain)
-    participant P as Proof Builder + Precompile 0x0FD2
-    participant L as KarunLedger (Creditcoin)
+    participant E as KarunEscrow<br/>(collateral chain)
+    participant W as Worker
+    participant P as Attestcoin<br/>attestors + 0x0FD2
+    participant L as KarunLedger<br/>(Creditcoin, arbiter)
+    participant S as KarunSpender<br/>(payout chain)
     participant R as Recipient
 
-    U->>E: lock(5,000 mUSDC)
-    E-->>W: Locked event
-    W->>P: prove lock tx
-    P->>L: submitLockProof (verified)
-    L->>L: credit line = 80% = 4,000
-    U->>L: spend(recipient, 1,000)
-    L->>R: instant payout from pool
-    L-->>W: DeductionQueued(claimId)
-    W->>E: deduct(user, 1,003, claimId)
-    E-->>W: Deducted event
-    W->>P: prove deduction tx
-    P->>L: submitDeductionProof (verified)
-    L->>L: claim settled, no debt remains
+    U->>E: lock(5,000)
+    E-->>W: Locked
+    W->>P: wait for attestation, fetch proofs
+    W->>L: submitLockProof
+    L->>L: balance opens at 4,000
+
+    U->>L: requestPayment(recipient, 1000, payoutChain, sourceChain)
+    L-->>W: PaymentAuthorized(claimId)
+    W->>S: payout(claimId, recipient, 1000)
+    S->>R: 1,000 arrives
+    W->>L: submitPaymentProof
+
+    W->>E: deduct(user, 1003, claimId)
+    W->>L: submitDeductionProof
+    L->>L: claim settled, outstanding → 0
 ```
 
 ### Contracts
 
 | Contract | Chain | Role |
 |---|---|---|
-| `KarunEscrow.sol` | Source chain (Sepolia) | Collateral vault: lock, operator deduction, delayed withdrawal |
-| `KarunLedger.sol` | Creditcoin testnet | Attestcoin Smart Contract: verifies lock/deduction proofs, manages the unified credit line, pays spends from the pool |
-| `KarunAscBase.sol` | Creditcoin testnet | Reusable ASC base: precompile integration + replay protection |
-| `MockUSDC.sol` | both | 6-decimal demo stablecoin |
+| `KarunLedger.sol` | Creditcoin | The arbiter. Attestcoin Smart Contract: verifies all three proofs, holds the balance, authorises payments, settles claims. Holds no tokens. |
+| `KarunEscrow.sol` | Collateral chain | Collateral vault: lock, settled deduction, delayed withdrawal |
+| `KarunSpender.sol` | Payout chain | Liquidity pool and payout endpoint, one payout per claim id |
+| `KarunAscBase.sol` | Creditcoin | Reusable ASC base: precompile handle, query ids, replay protection |
+| `MockUSDC.sol` | both | 6 decimal demo stablecoin |
 
 ### Security properties
 
-- **Replay protection**: every proof maps to a unique query id, processed once.
-- **Receipt status check**: precompile proves inclusion only; the ledger additionally requires `receiptStatus == 1`.
-- **Emitter check**: only events emitted by the registered escrow address count.
-- **Monotonic collateral sync**: `Locked` events carry cumulative totals, so stale proofs can never inflate a balance.
-- **Per-chain solvency**: a spend must be coverable by the collateral on the chain it will be deducted from.
-- **Double-spend safety**: all limit accounting lives in one place (Creditcoin ledger).
+- **Replay protection:** every proof maps to a unique query id derived from chain key, block height and transaction index.
+- **Receipt status check:** the precompile proves inclusion, not success; the ledger requires `receiptStatus == 1` itself.
+- **Emitter check:** only events from the address registered for that chain count.
+- **Monotonic collateral:** `Locked` carries cumulative totals and the ledger only raises collateral from a lock proof, so stale proofs are inert.
+- **Per chain solvency:** a payment must be coverable by the collateral on the chain it will settle from.
+- **Double spend safety:** all accounting lives in one contract, and the amount is reserved before the payout is authorised.
+- **Bounded operator:** the operator key can only carry actions the ledger already authorised. It cannot create collateral, raise a balance or settle a claim.
 
-### Roadmap: from operator to full trustlessness
+Full analysis, including what happens when the worker dies mid cycle: [security model](docs/security-model.md).
 
-Attestcoin **Writability** is not yet live on testnet (per official docs, it is under audit). Today the escrow deduction is triggered by an operator key, but the *settlement of the claim is already trustless* (proven via readability). When Writability ships, the operator is replaced by an Outbox→Inbox message from the ledger itself, closing the loop with zero trusted parties. LP liquidity provisioning and multi-chain rebalancing follow the same path.
+### Roadmap: removing the last trusted party
+
+Attestcoin **Writability** is under audit at the time of writing. Until it ships, an operator key carries the two outbound actions. When it lands, the ledger publishes those instructions through an Outbox and an Inbox executes them on the destination chain, validated by attestor signatures. The operator leaves the trust model; claim ids and replay protection stay exactly as they are.
 
 ## Repo layout
 
 ```
-src/            contracts (Escrow, Ledger, AscBase, MockUSDC)
-test/           15 forge tests incl. full lock→prove→spend→deduct→settle cycle
-script/         forge deploy scripts (Sepolia + Creditcoin testnet)
-worker/         offchain worker: proof generation via @gluwa/usc-sdk + prover API
+src/      contracts: Ledger (arbiter), Escrow, Spender, AscBase, MockUSDC
+test/     21 forge tests, including a full cross chain cycle
+sim/      three chain local simulation, 8 scenarios, 20 assertions
+script/   deployment scripts
+worker/   offchain worker: proofs via @gluwa/usc-sdk, resumable, serial queue
+arayuz/   the interface, reads contracts directly with no backend
+docs/     full documentation
 ```
 
 ## Run
 
 ```bash
-# tests
-forge test
-
-# deploy (fill .env first, see .env.example)
-forge script script/Deploy.s.sol:DeploySepolia    --rpc-url sepolia            --broadcast
-ESCROW_ADDRESS=0x... \
-forge script script/Deploy.s.sol:DeployCreditcoin --rpc-url creditcoin_testnet --broadcast
-
-# worker
-npm install && npm run worker
+forge test          # 21 unit tests
+sim/calistir.sh     # three local chains, full cycle plus failure paths
+npm run worker      # the offchain worker
 ```
 
-Network reference: Creditcoin testnet RPC `https://rpc.cc3-testnet.creditcoin.network` (chain id 102031), proof builder `https://prover.cc3-testnet.creditcoin.network`, source chain Sepolia (chain key 1).
+Deployment steps and network details: [running locally](docs/running-locally.md) · Live addresses: [deployments](docs/deployments.md).
 
 ## Team
 
-Ömer Metehan İzal — [@Foreveranka](https://github.com/Foreveranka) · İstanbul, Türkiye · focus: DeFi / payments / stablecoins
+Ömer Metehan İzal — [@Foreveranka](https://github.com/Foreveranka) · İstanbul, Türkiye · focus: DeFi, payments, stablecoins
