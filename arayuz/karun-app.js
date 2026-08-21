@@ -127,10 +127,10 @@ async function tazele() {
       usdcSep.balanceOf(hesap),
       usdcCc.balanceOf(C.creditcoin.ledger),
     ]);
-    $("#o-kilit").textContent = birim(kilit) + " mUSDC";
-    $("#o-attested").textContent = birim(attested) + " mUSDC";
-    $("#o-limit").textContent = birim(limit) + " mUSDC";
-    $("#o-borc").textContent = birim(borc) + " mUSDC";
+    $("#o-kilit").textContent = "$" + birim(kilit);
+    $("#o-attested").textContent = "$" + birim(attested);
+    $("#o-limit").textContent = "$" + birim(limit);
+    $("#o-borc").textContent = "$" + birim(borc);
     $("#b-cuzdan").textContent = birim(cuzdanBakiye);
     $("#b-havuz").textContent = birim(havuz);
     harcamaOnizle();

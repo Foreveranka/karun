@@ -3,152 +3,270 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Karun — one balance, every chain</title>
+<title>Karun</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🪙</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
 <style>
+/* ── Tasarim sistemi ──
+   Kurallar: tek birincil metrik (gorsel hiyerarsi), 8px araliklar,
+   tek vurgu rengi, genis bosluk, buyuk hedefler (Fitts),
+   ekranda tek gorev (Hick / progressive disclosure), tabular rakamlar. */
 :root{
-  --bg:#0b0e14; --panel:#131824; --panel2:#0f1420; --line:#232b3d;
-  --ink:#e8ecf4; --dim:#8b95ab; --gold:#e8b64c; --gold2:#f5d78a;
-  --green:#4cc38a; --red:#e5484d; --blue:#5b9dd9;
+  --bg:#f5f5f7;            /* Apple acik zemin */
+  --yuzey:#ffffff;
+  --murekkep:#1d1d1f;
+  --ikincil:#6e6e73;
+  --ucuncul:#aeaeb2;
+  --cizgi:rgba(0,0,0,.08);
+  --vurgu:#b07a1e;         /* Karun altini, tek vurgu */
+  --vurgu-koyu:#96650f;
+  --yesil:#248a3d;
+  --kirmizi:#d70015;
+  --golge:0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.06);
 }
-*{box-sizing:border-box;margin:0}
-body{font-family:ui-sans-serif,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
-  background:radial-gradient(1200px 600px at 70% -10%,#1a2236 0%,var(--bg) 55%);color:var(--ink);min-height:100vh}
-.wrap{max-width:1060px;margin:0 auto;padding:28px 20px 80px}
-header{display:flex;align-items:center;gap:14px;margin-bottom:6px}
-.logo{width:46px;height:46px;border-radius:12px;display:grid;place-items:center;font-size:26px;
-  background:linear-gradient(135deg,#2a1f0a,#4a3812);border:1px solid #6b5320}
-h1{font-size:26px;letter-spacing:.5px}
-h1 span{color:var(--gold)}
-.tag{color:var(--dim);font-size:14px;margin-top:2px}
-#baglan{margin-left:auto;background:linear-gradient(135deg,var(--gold),#c98f2a);color:#1a1408;border:none;
-  padding:10px 18px;border-radius:10px;font-weight:700;font-size:14px;cursor:pointer}
-#baglan:hover{filter:brightness(1.08)}
-#cuzdan-bilgi{margin-left:auto;text-align:right;font-size:13px;color:var(--dim);display:none}
-#cuzdan-bilgi b{color:var(--ink);font-family:ui-monospace,Menlo,monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-font-smoothing:antialiased}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Helvetica,Arial,sans-serif;
+  background:var(--bg);color:var(--murekkep);min-height:100vh;
+}
+.sayfa{max-width:640px;margin:0 auto;padding:0 24px 96px}
 
-.ozet{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:26px 0}
-.kart{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
-.kart .k-ad{font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim)}
-.kart .k-deger{font-size:30px;font-weight:800;margin-top:6px;font-variant-numeric:tabular-nums}
-.kart .k-alt{font-size:12px;color:var(--dim);margin-top:4px}
-.kart.altin .k-deger{color:var(--gold2)}
+/* ── ust cubuk: minimal ── */
+nav{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:20px 0 0;
+}
+.marka{display:flex;align-items:center;gap:10px;font-weight:600;font-size:17px;letter-spacing:-.2px}
+.marka .pul{font-size:20px}
+#baglan{
+  background:var(--murekkep);color:#fff;border:none;border-radius:980px;
+  padding:10px 20px;font-size:14px;font-weight:500;cursor:pointer;font-family:inherit;
+  transition:opacity .15s;
+}
+#baglan:hover{opacity:.85}
+#baglan:disabled{opacity:.4;cursor:default}
+#cuzdan-bilgi{display:none;font-size:13px;color:var(--ikincil);text-align:right;line-height:1.4}
+#cuzdan-bilgi b{color:var(--murekkep);font-weight:600;font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:12.5px}
 
-.izgara{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-@media(max-width:800px){.izgara{grid-template-columns:1fr}.ozet{grid-template-columns:1fr}}
-.bolum{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
-.bolum h2{font-size:15px;margin-bottom:4px;display:flex;align-items:center;gap:8px}
-.zincir{font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--line);color:var(--dim)}
-.bolum p.ac{color:var(--dim);font-size:13px;margin:6px 0 14px;line-height:1.5}
-label{display:block;font-size:12px;color:var(--dim);margin:10px 0 4px}
-input{width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:10px;color:var(--ink);
-  padding:11px 12px;font-size:15px;outline:none;font-family:inherit}
-input:focus{border-color:var(--gold)}
-button.eylem{width:100%;margin-top:14px;padding:12px;border:none;border-radius:10px;font-weight:700;
-  font-size:14px;cursor:pointer;background:#1d2740;color:var(--ink);border:1px solid var(--line)}
-button.eylem:hover{background:#243052}
-button.eylem.birincil{background:linear-gradient(135deg,var(--gold),#c98f2a);color:#1a1408;border:none}
-button.eylem:disabled{opacity:.45;cursor:not-allowed}
+/* ── kahraman: TEK birincil metrik ── */
+.kahraman{text-align:center;padding:64px 0 8px}
+.kahraman .etiket{font-size:15px;color:var(--ikincil);font-weight:500}
+.kahraman .deger{
+  font-size:64px;font-weight:700;letter-spacing:-2px;line-height:1.1;
+  font-variant-numeric:tabular-nums;margin-top:8px;
+}
+.kahraman .aciklama{font-size:13px;color:var(--ucuncul);margin-top:10px}
 
-.akis{margin-top:14px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
-.akis h2{font-size:15px;margin-bottom:10px}
-#gunluk{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;line-height:1.75;max-height:260px;
-  overflow-y:auto;white-space:pre-wrap;color:var(--dim)}
-#gunluk .ok{color:var(--green)}
-#gunluk .hata{color:var(--red)}
-#gunluk .bekle{color:var(--gold)}
-.adimlar{display:flex;gap:8px;margin:16px 0 4px;flex-wrap:wrap}
-.adim{flex:1;min-width:120px;text-align:center;font-size:11.5px;color:var(--dim);
-  border:1px dashed var(--line);border-radius:10px;padding:8px 6px}
-.adim.aktif{border-color:var(--gold);color:var(--gold2);border-style:solid}
-.adim.tamam{border-color:var(--green);color:var(--green);border-style:solid}
-.cipler{display:flex;gap:10px;flex-wrap:wrap;margin:-10px 0 16px}
-.cip{font-size:12.5px;color:var(--dim);background:var(--panel);border:1px solid var(--line);
-  border-radius:20px;padding:6px 12px}
-.cip b{color:var(--ink)}
-.onizleme{font-size:12px;color:var(--gold2);margin-top:8px;min-height:16px}
-#gunluk a{color:var(--blue);text-decoration:none}
-footer{margin-top:22px;color:var(--dim);font-size:12px;text-align:center}
-footer a{color:var(--blue);text-decoration:none}
+/* ── ikincil metrikler: sessiz, tek satir ── */
+.ikincil-satir{
+  display:flex;justify-content:center;gap:0;margin:28px 0 40px;
+  background:var(--yuzey);border-radius:16px;box-shadow:var(--golge);
+}
+.metrik{flex:1;text-align:center;padding:18px 8px;position:relative}
+.metrik + .metrik::before{
+  content:"";position:absolute;left:0;top:22%;height:56%;width:1px;background:var(--cizgi);
+}
+.metrik .m-deger{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.3px}
+.metrik .m-ad{font-size:12px;color:var(--ikincil);margin-top:3px}
+
+/* ── eylem karti: ekranda TEK gorev ── */
+.eylem-karti{
+  background:var(--yuzey);border-radius:20px;box-shadow:var(--golge);
+  padding:28px;margin-bottom:16px;
+}
+.sekmeler{
+  display:flex;background:var(--bg);border-radius:12px;padding:3px;margin-bottom:24px;
+}
+.sekme{
+  flex:1;text-align:center;padding:9px 0;border-radius:9px;font-size:14px;font-weight:500;
+  color:var(--ikincil);cursor:pointer;user-select:none;transition:all .18s;border:none;background:none;font-family:inherit;
+}
+.sekme.secili{background:var(--yuzey);color:var(--murekkep);box-shadow:0 1px 4px rgba(0,0,0,.10);font-weight:600}
+.panel{display:none}
+.panel.acik{display:block}
+.panel .yardim{font-size:13.5px;color:var(--ikincil);line-height:1.55;margin-bottom:20px}
+label{display:block;font-size:13px;font-weight:500;color:var(--murekkep);margin:16px 0 6px}
+input{
+  width:100%;font-family:inherit;font-size:17px;color:var(--murekkep);
+  background:var(--bg);border:1.5px solid transparent;border-radius:12px;
+  padding:14px 16px;outline:none;transition:border-color .15s,background .15s;
+  font-variant-numeric:tabular-nums;
+}
+input:focus{background:var(--yuzey);border-color:var(--vurgu)}
+input::placeholder{color:var(--ucuncul)}
+.onizleme{font-size:12.5px;color:var(--ikincil);margin-top:10px;min-height:18px;line-height:1.5}
+button.birincil{
+  width:100%;margin-top:20px;padding:16px;border:none;border-radius:12px;
+  background:var(--vurgu);color:#fff;font-size:16px;font-weight:600;font-family:inherit;
+  cursor:pointer;transition:background .15s;
+}
+button.birincil:hover{background:var(--vurgu-koyu)}
+button.birincil:disabled{opacity:.45;cursor:default}
+button.ikincil-dugme{
+  width:100%;margin-top:10px;padding:13px;border:none;border-radius:12px;
+  background:none;color:var(--vurgu);font-size:14px;font-weight:500;font-family:inherit;cursor:pointer;
+}
+button.ikincil-dugme:hover{background:rgba(176,122,30,.07)}
+button.ikincil-dugme:disabled{opacity:.45;cursor:default}
+
+/* ── durum: sistemin gorunurlugu ── */
+.durum-karti{
+  background:var(--yuzey);border-radius:20px;box-shadow:var(--golge);padding:28px;
+}
+.durum-karti h2{font-size:15px;font-weight:600;margin-bottom:18px;letter-spacing:-.2px}
+.adimlar{display:flex;flex-direction:column;gap:0;margin-bottom:6px}
+.adim{
+  display:flex;align-items:center;gap:12px;font-size:13.5px;color:var(--ucuncul);
+  padding:7px 0;position:relative;
+}
+.adim::before{
+  content:"";width:8px;height:8px;border-radius:50%;background:var(--cizgi);
+  flex:none;transition:background .2s;
+}
+.adim.aktif{color:var(--vurgu);font-weight:500}
+.adim.aktif::before{background:var(--vurgu);animation:nabiz 1.4s ease-in-out infinite}
+.adim.tamam{color:var(--murekkep)}
+.adim.tamam::before{background:var(--yesil)}
+@keyframes nabiz{0%,100%{opacity:1}50%{opacity:.35}}
+
+#gunluk{
+  border-top:1px solid var(--cizgi);margin-top:16px;padding-top:14px;
+  font-size:12.5px;line-height:1.9;color:var(--ikincil);
+  max-height:220px;overflow-y:auto;white-space:pre-wrap;
+}
+#gunluk .ok{color:var(--yesil)}
+#gunluk .hata{color:var(--kirmizi)}
+#gunluk .bekle{color:var(--vurgu)}
+#gunluk a{color:var(--vurgu);text-decoration:none}
+
+/* ── ayrintilar: istege bagli bilgi (progressive disclosure) ── */
+details{margin-top:16px}
+summary{
+  font-size:13px;color:var(--ikincil);cursor:pointer;list-style:none;
+  text-align:center;padding:8px;user-select:none;
+}
+summary::after{content:" ▾"}
+details[open] summary::after{content:" ▴"}
+.detay-izgara{
+  display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--cizgi);
+  border-radius:12px;overflow:hidden;margin-top:8px;
+}
+.detay{background:var(--yuzey);padding:14px 16px}
+.detay .d-ad{font-size:12px;color:var(--ikincil)}
+.detay .d-deger{font-size:15px;font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums}
+
+footer{text-align:center;font-size:12px;color:var(--ucuncul);margin-top:40px;line-height:1.8}
+footer a{color:var(--ikincil);text-decoration:none}
+
+@media(max-width:520px){
+  .kahraman .deger{font-size:44px;letter-spacing:-1px}
+  .sayfa{padding:0 16px 64px}
+}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div class="logo">🪙</div>
-    <div>
-      <h1>KAR<span>U</span>N</h1>
-      <div class="tag">one spendable balance across every chain · powered by Attestcoin Protocol</div>
-    </div>
-    <button id="baglan">Connect wallet</button>
+<div class="sayfa">
+  <nav>
+    <div class="marka"><span class="pul">🪙</span>Karun</div>
+    <button id="baglan">Connect Wallet</button>
     <div id="cuzdan-bilgi"></div>
-  </header>
+  </nav>
 
-  <div class="ozet">
-    <div class="kart">
-      <div class="k-ad">Locked collateral · Sepolia</div>
-      <div class="k-deger" id="o-kilit">—</div>
-      <div class="k-alt">attested on Creditcoin: <span id="o-attested">—</span></div>
+  <!-- Kural: goz once en onemli sayiya duser. Tek kahraman metrik. -->
+  <div class="kahraman">
+    <div class="etiket">Spendable balance</div>
+    <div class="deger" id="o-limit">$0.00</div>
+    <div class="aciklama">Backed by your locked funds on every chain · verified by Attestcoin</div>
+  </div>
+
+  <div class="ikincil-satir">
+    <div class="metrik">
+      <div class="m-deger" id="o-kilit">—</div>
+      <div class="m-ad">Locked on Sepolia</div>
     </div>
-    <div class="kart altin">
-      <div class="k-ad">Spendable limit · everywhere</div>
-      <div class="k-deger" id="o-limit">—</div>
-      <div class="k-alt">80% LTV, minus in-flight settlements</div>
+    <div class="metrik">
+      <div class="m-deger" id="o-attested">—</div>
+      <div class="m-ad">Proven on Creditcoin</div>
     </div>
-    <div class="kart">
-      <div class="k-ad">In-flight settlements</div>
-      <div class="k-deger" id="o-borc">—</div>
-      <div class="k-alt">auto-deducted from your escrow</div>
+    <div class="metrik">
+      <div class="m-deger" id="o-borc">—</div>
+      <div class="m-ad">Settling now</div>
     </div>
   </div>
 
-  <div class="cipler">
-    <span class="cip">Your Sepolia mUSDC: <b id="b-cuzdan">—</b></span>
-    <span class="cip">Karun pool liquidity: <b id="b-havuz">—</b></span>
-    <span class="cip">Fee: <b>0.30%</b></span>
-    <span class="cip">LTV: <b>80%</b></span>
-  </div>
-
-  <div class="izgara">
-    <div class="bolum">
-      <h2>1 · Lock collateral <span class="zincir">Sepolia</span></h2>
-      <p class="ac">Lock mUSDC into your escrow. Attestcoin proves the lock on Creditcoin and your limit opens, no bridging.</p>
-      <label>Amount (mUSDC)</label>
-      <input id="kilit-miktar" type="number" placeholder="5000" min="0">
-      <button class="eylem" id="faucet">Get 10,000 test mUSDC</button>
-      <button class="eylem birincil" id="kilitle">Lock</button>
+  <!-- Kural (Hick): ekranda tek gorev. Sekmeli tek kart. -->
+  <div class="eylem-karti">
+    <div class="sekmeler">
+      <button class="sekme secili" id="sekme-kilit" type="button">Add funds</button>
+      <button class="sekme" id="sekme-harca" type="button">Send</button>
     </div>
 
-    <div class="bolum">
-      <h2>2 · Spend anywhere <span class="zincir">Creditcoin</span></h2>
-      <p class="ac">Pay any address instantly from the Karun pool. The cost settles against your Sepolia escrow automatically.</p>
-      <label>Recipient</label>
-      <input id="harca-alici" placeholder="0x...">
-      <label>Amount (mUSDC) · fee 0.30%</label>
-      <input id="harca-miktar" type="number" placeholder="1000" min="0">
+    <div class="panel acik" id="panel-kilit">
+      <p class="yardim">Lock mUSDC on Sepolia. Once the lock is proven on Creditcoin, 80% of it becomes spendable anywhere — no bridging.</p>
+      <label for="kilit-miktar">Amount</label>
+      <input id="kilit-miktar" type="number" inputmode="decimal" placeholder="5,000" min="0">
+      <button class="birincil" id="kilitle">Lock Funds</button>
+      <button class="ikincil-dugme" id="faucet">Get 10,000 test mUSDC</button>
+    </div>
+
+    <div class="panel" id="panel-harca">
+      <p class="yardim">Pay any address instantly. The exact amount settles against your Sepolia funds automatically.</p>
+      <label for="harca-alici">To</label>
+      <input id="harca-alici" placeholder="0x…" spellcheck="false" autocomplete="off">
+      <label for="harca-miktar">Amount</label>
+      <input id="harca-miktar" type="number" inputmode="decimal" placeholder="1,000" min="0">
       <div id="harca-onizleme" class="onizleme"></div>
-      <button class="eylem birincil" id="harca">Spend</button>
+      <button class="birincil" id="harca">Send</button>
     </div>
   </div>
 
-  <div class="akis">
-    <h2>Live settlement flow</h2>
+  <!-- Kural (Nielsen 1): sistem durumu her an gorunur. -->
+  <div class="durum-karti">
+    <h2>Settlement</h2>
     <div class="adimlar">
-      <div class="adim" id="a1">1 · Lock on Sepolia</div>
-      <div class="adim" id="a2">2 · Attestcoin proof → limit</div>
-      <div class="adim" id="a3">3 · Instant spend on Creditcoin</div>
-      <div class="adim" id="a4">4 · Escrow auto-deduction</div>
-      <div class="adim" id="a5">5 · Deduction proven, settled</div>
+      <div class="adim" id="a1">Funds locked on Sepolia</div>
+      <div class="adim" id="a2">Lock proven on Creditcoin — balance opened</div>
+      <div class="adim" id="a3">Payment sent instantly</div>
+      <div class="adim" id="a4">Escrow auto-deduction</div>
+      <div class="adim" id="a5">Deduction proven — settled, no debt</div>
     </div>
-    <div id="gunluk">Connect a wallet to begin. Configure addresses in karun-config.js.</div>
+    <div id="gunluk"></div>
   </div>
+
+  <details>
+    <summary>Details</summary>
+    <div class="detay-izgara">
+      <div class="detay"><div class="d-ad">Your Sepolia mUSDC</div><div class="d-deger" id="b-cuzdan">—</div></div>
+      <div class="detay"><div class="d-ad">Pool liquidity</div><div class="d-deger" id="b-havuz">—</div></div>
+      <div class="detay"><div class="d-ad">Fee</div><div class="d-deger">0.30%</div></div>
+      <div class="detay"><div class="d-ad">Loan-to-value</div><div class="d-deger">80%</div></div>
+    </div>
+  </details>
 
   <footer>
-    Karun · BUIDL CTC 2026 Fall · Creditcoin testnet 102031 + Sepolia · <a href="https://github.com/Foreveranka/karun" target="_blank">GitHub</a>
+    BUIDL CTC 2026 Fall · Creditcoin Testnet + Sepolia<br>
+    <a href="https://github.com/Foreveranka/karun" target="_blank" rel="noopener">GitHub</a>
   </footer>
 </div>
 
+<script>
+/* Sekme gecisi: ekranda tek gorev tut (Hick yasasi). */
+(function(){
+  const sk = document.getElementById("sekme-kilit");
+  const sh = document.getElementById("sekme-harca");
+  const pk = document.getElementById("panel-kilit");
+  const ph = document.getElementById("panel-harca");
+  function sec(kilit){
+    sk.classList.toggle("secili", kilit);
+    sh.classList.toggle("secili", !kilit);
+    pk.classList.toggle("acik", kilit);
+    ph.classList.toggle("acik", !kilit);
+  }
+  sk.onclick = () => sec(true);
+  sh.onclick = () => sec(false);
+})();
+</script>
 <script src="karun-config.js"></script>
 <script src="karun-app.js"></script>
 </body>
