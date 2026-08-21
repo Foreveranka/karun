@@ -4,6 +4,10 @@
 
 > Named after King Croesus ("Karun" in Turkish), the Anatolian king who minted the world's first coins.
 
+**[Live demo](https://karun-eta.vercel.app)** · **[Documentation](docs/)** · **[Testnet deployment and recorded run](TESTNET.md)**
+
+Live on testnet: a single payment cycle verified three separate Attestcoin proofs on chain. Locked 5,000 mUSDC on Sepolia, paid a recipient 1,000 on Sepolia from the Karun pool, and settled it from the escrow. Outstanding debt after the cycle: zero.
+
 ## The Problem
 
 Your money is scattered across chains. Spending on a chain where you hold nothing means bridging: slow, costly, and risky. Every bridge hop is friction and attack surface.
