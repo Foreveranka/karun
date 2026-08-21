@@ -1,19 +1,22 @@
 /**
- * Karun Offchain Worker
+ * Karun Offchain Worker (dayanikli surum)
  *
- * Iki isi vardir:
- *  1. KILIT AKISI: Sepolia'daki KarunEscrow'un Locked olaylarini izler, blok
- *     Creditcoin'de attest edilince Proof Builder'dan kanit alir ve
- *     KarunLedger.submitLockProof ile kullanicinin limitini acar.
- *  2. KESINTI AKISI: Creditcoin'deki KarunLedger'in DeductionQueued olaylarini
- *     izler, Sepolia escrow'unda deduct() calistirir (operator; Attestcoin
- *     Writability testnete cikinca bu adim trustless mesaja donusecek),
- *     ardindan kesinti islemini kanitlayip submitDeductionProof ile talebi kapatir.
+ * Gorevler:
+ *  1. KILIT: Sepolia'daki Locked olaylarini izler, Attestcoin kaniti uretir,
+ *     KarunLedger.submitLockProof ile limiti acar.
+ *  2. KESINTI: Creditcoin'deki DeductionQueued olaylarini izler, escrow'da
+ *     deduct() calistirir, kesintiyi kanitlayip submitDeductionProof ile kapatir.
  *
- * Calistirma: npm run worker
+ * Dayaniklilik:
+ *  - Yeniden baslatmada son islenen bloklardan devam eder (worker/durum.json)
+ *  - Zincir ustu durumu kontrol ederek mukerrer islemeyi atlar
+ *  - Tum isler tek sirali kuyruktan gecer (nonce cakismasi olmaz)
+ *  - Gecici hatalarda ussel bekleme ile 5 kez dener
  */
 import { Contract, JsonRpcProvider, Wallet } from "ethers";
 import { proofProvider, chainInfo } from "@gluwa/usc-sdk";
+import * as fs from "fs";
+import * as path from "path";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -23,12 +26,11 @@ const ESCROW_ABI = [
   "event Deducted(address indexed user, uint256 amount, bytes32 indexed claimId, uint256 remainingLocked)",
   "function deduct(address user, uint256 amount, bytes32 claimId) external",
   "function locked(address user) view returns (uint256)",
+  "function processedClaims(bytes32) view returns (bool)",
 ];
 
 const LEDGER_ABI = [
   "event DeductionQueued(bytes32 indexed claimId, address indexed user, uint64 indexed chainKey, uint256 amount)",
-  "event CollateralSynced(address indexed user, uint64 indexed chainKey, uint256 totalLocked, bytes32 queryId)",
-  "event ClaimSettled(bytes32 indexed claimId, address indexed user, uint256 amount, bytes32 queryId)",
   "function submitLockProof(uint64 chainKey, uint64 blockHeight, bytes encodedTransaction, bytes32 merkleRoot, tuple(bytes32 hash, bool isLeft)[] siblings, bytes32 lowerEndpointDigest, bytes32[] continuityRoots) external",
   "function submitDeductionProof(uint64 chainKey, uint64 blockHeight, bytes encodedTransaction, bytes32 merkleRoot, tuple(bytes32 hash, bool isLeft)[] siblings, bytes32 lowerEndpointDigest, bytes32[] continuityRoots) external",
   "function claims(bytes32 claimId) view returns (address user, uint64 chainKey, uint256 amount, bool settled)",
@@ -36,47 +38,71 @@ const LEDGER_ABI = [
   "function available(address user) view returns (uint256)",
 ];
 
+const DURUM_YOLU = path.join(__dirname, "durum.json");
+const CHAIN_KEY = Number(process.env.CHAIN_KEY ?? "1");
+const TARAMA_ARALIGI = 15_000; // olay tarama periyodu (ms)
+
 function zorunlu(ad: string): string {
   const deger = process.env[ad];
   if (!deger) throw new Error(`Ortam degiskeni eksik: ${ad}`);
   return deger;
 }
 
-const CHAIN_KEY = Number(process.env.CHAIN_KEY ?? "1"); // Sepolia = 1
-
-async function kanitUretVeBekle(
-  txHash: string,
-  proofBuilderUrl: string,
-  ccProvider: JsonRpcProvider,
-  kaynakProvider: JsonRpcProvider
-): Promise<proofProvider.ContinuityResponse> {
-  const tx = await kaynakProvider.getTransaction(txHash);
-  if (!tx || !tx.blockNumber) throw new Error(`Islem bulunamadi/kazilmadi: ${txHash}`);
-
-  const proofBuilder = new proofProvider.service.ProofBuilder(CHAIN_KEY, proofBuilderUrl);
-  const bilgi = new chainInfo.PrecompileChainInfoProvider(ccProvider);
-  const sonAttest = await bilgi.getLatestAttestedHeightAndHash(CHAIN_KEY);
-  console.log(`   Blok ${tx.blockNumber} icin attestation bekleniyor (son: ${sonAttest.height})...`);
-
-  // attestation araligi ~8 dk; 20 dk'ya kadar sabirli ol
-  await proofBuilder.waitUntilHeightAttested(CHAIN_KEY, tx.blockNumber, 15_000, 1_200_000);
-  console.log(`   Blok ${tx.blockNumber} attest edildi, kanit uretiliyor...`);
-
-  const kanit = await proofBuilder.getProof(txHash);
-  if (!kanit.success || !kanit.data) throw new Error(`Kanit uretilemedi: ${kanit.error}`);
-  return kanit.data;
+function zaman(): string {
+  return new Date().toISOString().slice(11, 19);
+}
+function bilgi(mesaj: string) {
+  console.log(`[${zaman()}] ${mesaj}`);
+}
+function hataYaz(mesaj: string, hata: unknown) {
+  const ozet = hata instanceof Error ? hata.message.slice(0, 300) : String(hata).slice(0, 300);
+  console.error(`[${zaman()}] HATA ${mesaj}: ${ozet}`);
 }
 
-function kanitParametreleri(p: proofProvider.ContinuityResponse) {
-  return [
-    p.chainKey,
-    p.headerNumber,
-    p.txBytes,
-    p.merkleProof.root,
-    p.merkleProof.siblings,
-    p.continuityProof.lowerEndpointDigest,
-    p.continuityProof.roots,
-  ] as const;
+interface Durum {
+  sepoliaSonBlok: number;
+  creditcoinSonBlok: number;
+}
+
+function durumOku(): Durum {
+  try {
+    return JSON.parse(fs.readFileSync(DURUM_YOLU, "utf8"));
+  } catch {
+    return { sepoliaSonBlok: 0, creditcoinSonBlok: 0 };
+  }
+}
+function durumYaz(durum: Durum) {
+  fs.writeFileSync(DURUM_YOLU, JSON.stringify(durum));
+}
+
+async function bekle(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Ussel bekleme ile en cok 5 deneme. */
+async function dene<T>(ad: string, is_: () => Promise<T>): Promise<T> {
+  let sonHata: unknown;
+  for (let deneme = 1; deneme <= 5; deneme++) {
+    try {
+      return await is_();
+    } catch (hata) {
+      sonHata = hata;
+      hataYaz(`${ad} (deneme ${deneme}/5)`, hata);
+      await bekle(Math.min(60_000, 2_000 * 2 ** deneme));
+    }
+  }
+  throw sonHata;
+}
+
+/** Tek sirali is kuyrugu: ayni cuzdanla nonce cakismasini onler. */
+class Kuyruk {
+  private zincir: Promise<void> = Promise.resolve();
+
+  ekle(ad: string, is_: () => Promise<void>) {
+    this.zincir = this.zincir
+      .then(() => is_())
+      .catch((hata) => hataYaz(`kuyruk isi '${ad}' vazgecildi`, hata));
+  }
 }
 
 async function main() {
@@ -89,47 +115,144 @@ async function main() {
 
   const escrow = new Contract(zorunlu("ESCROW_ADDRESS"), ESCROW_ABI, sepoliaCuzdan);
   const ledger = new Contract(zorunlu("LEDGER_ADDRESS"), LEDGER_ABI, ccCuzdan);
+  const escrowAdres = await escrow.getAddress();
+  const ledgerAdres = await ledger.getAddress();
 
-  console.log("Karun worker basladi");
-  console.log(`  Escrow (Sepolia):    ${await escrow.getAddress()}`);
-  console.log(`  Ledger (Creditcoin): ${await ledger.getAddress()}`);
+  const kuyruk = new Kuyruk();
+  const durum = durumOku();
 
-  // ── 1. kilit akisi ──
-  escrow.on(escrow.getEvent("Locked"), async (user, amount, totalLocked, olay) => {
-    const txHash = olay.log.transactionHash;
-    console.log(`\n[KILIT] ${user} ${amount} kilitledi (toplam ${totalLocked}) tx=${txHash}`);
-    try {
-      const kanit = await kanitUretVeBekle(txHash, proofBuilderUrl, ccProvider, sepoliaProvider);
+  bilgi("Karun worker basladi");
+  bilgi(`  Escrow (Sepolia):    ${escrowAdres}`);
+  bilgi(`  Ledger (Creditcoin): ${ledgerAdres}`);
+  bilgi(`  Operator/imzaci:     ${sepoliaCuzdan.address}`);
+
+  // ── kanit uretimi ──
+  async function kanitUret(txHash: string): Promise<proofProvider.ContinuityResponse> {
+    const tx = await sepoliaProvider.getTransaction(txHash);
+    if (!tx || !tx.blockNumber) throw new Error(`Islem bulunamadi/kazilmadi: ${txHash}`);
+
+    const proofBuilder = new proofProvider.service.ProofBuilder(CHAIN_KEY, proofBuilderUrl);
+    const bilgiSaglayici = new chainInfo.PrecompileChainInfoProvider(ccProvider);
+    const son = await bilgiSaglayici.getLatestAttestedHeightAndHash(CHAIN_KEY);
+    bilgi(`  Blok ${tx.blockNumber} icin attestation bekleniyor (son attest: ${son.height})...`);
+
+    await proofBuilder.waitUntilHeightAttested(CHAIN_KEY, tx.blockNumber, 15_000, 1_800_000);
+    bilgi(`  Blok ${tx.blockNumber} attest edildi, kanit uretiliyor...`);
+
+    const kanit = await proofBuilder.getProof(txHash);
+    if (!kanit.success || !kanit.data) throw new Error(`Kanit uretilemedi: ${kanit.error}`);
+    return kanit.data;
+  }
+
+  function kanitParametreleri(p: proofProvider.ContinuityResponse) {
+    return [
+      p.chainKey,
+      p.headerNumber,
+      p.txBytes,
+      p.merkleProof.root,
+      p.merkleProof.siblings,
+      p.continuityProof.lowerEndpointDigest,
+      p.continuityProof.roots,
+    ] as const;
+  }
+
+  // ── is tanimlari ──
+  async function kilitIsle(user: string, totalLocked: bigint, txHash: string) {
+    // zincir ustu senkron zaten bu duzeydeyse atla (mukerrer/yeniden baslatma)
+    const mevcut: bigint = await ledger.collateral(user, CHAIN_KEY);
+    if (mevcut >= totalLocked) {
+      bilgi(`[KILIT] ${user} zaten senkron (${mevcut}), atlandi`);
+      return;
+    }
+    await dene("kilit kaniti", async () => {
+      const kanit = await kanitUret(txHash);
       const gonderim = await ledger.submitLockProof(...kanitParametreleri(kanit), { gasLimit: 5_000_000n });
-      console.log(`[KILIT] Ledger'a islendi: ${gonderim.hash}`);
+      bilgi(`[KILIT] Kanit gonderildi: ${gonderim.hash}`);
       await gonderim.wait();
-      console.log(`[KILIT] Yeni limit: ${await ledger.available(user)}`);
-    } catch (hata) {
-      console.error(`[KILIT] HATA:`, hata);
+      bilgi(`[KILIT] ${user} yeni limiti: ${await ledger.available(user)}`);
+    });
+  }
+
+  async function kesintiIsle(claimId: string, user: string, amount: bigint) {
+    const talep = await ledger.claims(claimId);
+    if (talep.settled) {
+      bilgi(`[KESINTI] Talep ${claimId.slice(0, 10)}… zaten kapali, atlandi`);
+      return;
     }
-  });
 
-  // ── 2. kesinti akisi ──
-  ledger.on(ledger.getEvent("DeductionQueued"), async (claimId, user, chainKey, amount) => {
-    console.log(`\n[KESINTI] Talep ${claimId}: ${user} -> ${amount} (zincir ${chainKey})`);
-    try {
-      // 2a. escrow'da kesintiyi calistir (operator rolu)
-      const kesinti = await escrow.deduct(user, amount, claimId);
-      console.log(`[KESINTI] Escrow kesintisi gonderildi: ${kesinti.hash}`);
-      await kesinti.wait();
+    // 1. escrow'da kesinti (islenmisse atla)
+    const islendi: boolean = await escrow.processedClaims(claimId);
+    let kesintiTxHash: string;
+    if (islendi) {
+      bilgi(`[KESINTI] Escrow kesintisi zaten yapilmis, olay araniyor...`);
+      const filtre = escrow.filters.Deducted(user, null, claimId);
+      const olaylar = await escrow.queryFilter(filtre, -400_000);
+      if (olaylar.length === 0) throw new Error("islenmis talebin Deducted olayi bulunamadi");
+      kesintiTxHash = olaylar[olaylar.length - 1].transactionHash;
+    } else {
+      kesintiTxHash = await dene("escrow kesintisi", async () => {
+        const kesinti = await escrow.deduct(user, amount, claimId);
+        bilgi(`[KESINTI] Escrow kesintisi gonderildi: ${kesinti.hash}`);
+        const makbuz = await kesinti.wait();
+        if (!makbuz || makbuz.status !== 1) throw new Error("kesinti islemi basarisiz");
+        return kesinti.hash;
+      });
+    }
 
-      // 2b. kesintiyi Attestcoin ile kanitla ve talebi kapat
-      const kanit = await kanitUretVeBekle(kesinti.hash, proofBuilderUrl, ccProvider, sepoliaProvider);
+    // 2. kesinti kanitini ledger'a isle
+    await dene("kesinti kaniti", async () => {
+      const kanit = await kanitUret(kesintiTxHash);
       const gonderim = await ledger.submitDeductionProof(...kanitParametreleri(kanit), { gasLimit: 5_000_000n });
-      console.log(`[KESINTI] Talep kapatildi: ${gonderim.hash}`);
+      bilgi(`[KESINTI] Talep kapatildi: ${gonderim.hash}`);
       await gonderim.wait();
-    } catch (hata) {
-      console.error(`[KESINTI] HATA:`, hata);
-    }
-  });
+    });
+  }
 
-  // olay dinleyicileri calisir durumda tut
-  await new Promise(() => {});
+  // ── olay tarayicilar (yoklama; yeniden baslatmada gecmisi kapar) ──
+  async function sepoliaTara() {
+    const guncel = await sepoliaProvider.getBlockNumber();
+    if (durum.sepoliaSonBlok === 0) durum.sepoliaSonBlok = guncel - 5_000; // ilk calisma: son ~1 gun
+    const bastan = durum.sepoliaSonBlok + 1;
+    if (bastan > guncel) return;
+    const olaylar = await escrow.queryFilter(escrow.filters.Locked(), bastan, guncel);
+    for (const olay of olaylar) {
+      const [user, amount, totalLocked] = (olay as any).args;
+      bilgi(`[KILIT] Olay: ${user} +${amount} (toplam ${totalLocked}) tx=${olay.transactionHash}`);
+      kuyruk.ekle("kilit " + olay.transactionHash, () => kilitIsle(user, totalLocked, olay.transactionHash));
+    }
+    durum.sepoliaSonBlok = guncel;
+    durumYaz(durum);
+  }
+
+  async function creditcoinTara() {
+    const guncel = await ccProvider.getBlockNumber();
+    if (durum.creditcoinSonBlok === 0) durum.creditcoinSonBlok = guncel - 5_000;
+    const bastan = durum.creditcoinSonBlok + 1;
+    if (bastan > guncel) return;
+    const olaylar = await ledger.queryFilter(ledger.filters.DeductionQueued(), bastan, guncel);
+    for (const olay of olaylar) {
+      const [claimId, user, , amount] = (olay as any).args;
+      bilgi(`[KESINTI] Olay: talep ${claimId.slice(0, 10)}… ${user} -> ${amount}`);
+      kuyruk.ekle("kesinti " + claimId, () => kesintiIsle(claimId, user, amount));
+    }
+    durum.creditcoinSonBlok = guncel;
+    durumYaz(durum);
+  }
+
+  // surekli dongu
+  for (;;) {
+    try {
+      await sepoliaTara();
+    } catch (hata) {
+      hataYaz("Sepolia taramasi", hata);
+    }
+    try {
+      await creditcoinTara();
+    } catch (hata) {
+      hataYaz("Creditcoin taramasi", hata);
+    }
+    await bekle(TARAMA_ARALIGI);
+  }
 }
 
 main().catch((hata) => {

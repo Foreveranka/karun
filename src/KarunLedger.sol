@@ -179,6 +179,7 @@ contract KarunLedger is KarunAscBase {
 
         uint256 fee = (amount * feeBps) / 10_000;
         uint256 total = amount + fee;
+        require(poolToken.balanceOf(address(this)) >= amount, "Karun: havuz likiditesi yetersiz");
         require(total <= available(msg.sender), "Karun: limit yetersiz");
         // kesinti, o zincirdeki teminattan karsilanabilmeli
         require(
